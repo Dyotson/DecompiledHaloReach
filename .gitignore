@@ -1,0 +1,5 @@
+*.iso
+*.zip
+extracted/
+ghidra_projects/
+reach-recomp/out/
