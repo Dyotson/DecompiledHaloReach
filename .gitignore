@@ -6,3 +6,14 @@ reach-recomp/out/
 reach-recomp/generated/default/
 .claude/settings.local.json
 reach-recomp/generated/*/
+# Game media and anything derived from it never goes in the repo.
+*.xex
+*.map
+*.bik
+reach-recomp/generated/*.cpp
+reach-recomp/generated/*.h
+# Build/editor noise
+__pycache__/
+*.pyc
+.vscode/
+.idea/

@@ -1,0 +1,121 @@
+# DecompiledHaloReach
+
+A native PC port of **Halo: Reach (Xbox 360)** built by statically recompiling the
+original PowerPC executable to C++ with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk),
+plus the reverse-engineering notes and tooling needed to get it running.
+
+> **Status: early work in progress.** The recompiled game boots on Linux, creates its
+> threads, mounts its cache partitions, plays the intro Bink video and reaches the
+> title menu, but the menu currently renders black (textures are not being bound; see
+> [Status](#status)). It is not playable yet.
+
+This repository contains **no game code and no game data**. You need your own copy of
+the game (see [Legal](#legal)).
+
+## Goals
+
+1. Run the Xbox 360 build of Halo: Reach natively on x86-64 Linux, then Windows.
+2. Bring back the original **Credits (cR), rank and Armory progression**: earn cR by
+   playing, rank up, buy armor with cR. No microtransactions.
+3. **Peer-to-peer online play** in place of Xbox Live / system link.
+4. **Forge plus file share**: upload and download maps, gametypes and mods.
+
+## How it works
+
+- `default.xex` (Title ID `4D53085B`, base version 1.0, Media ID `566C10D3`) and the
+  four Waves audio DLLs it loads are translated function by function into C++ by
+  `rexglue codegen`, driven by `reach-recomp/reach_manifest.toml`.
+- The ReXGlue runtime (derived from [Xenia](https://github.com/xenia-canary/xenia-canary))
+  provides the Xbox 360 kernel/XAM high-level emulation, the Xenos GPU on Vulkan,
+  audio and the virtual file system.
+- This repo supplies what the generic toolchain can't work out on its own:
+  - `reach-recomp/hints/`: function boundaries and entry points the code scanner
+    missed, plus statically linked XAPI routines mapped to native SDK versions
+    (for example, the game's fiber switching).
+  - `reach-recomp/src/`: the app class and native overrides of kernel exports (RSA
+    public-key crypto, scripted controller input for automated tests, cross-DLL
+    import thunks).
+  - `tools/`: an ISO extractor, entry-point discovery against Ghidra, thunk
+    generation, run and debug scripts, and Ghidra repair scripts.
+  - `docs/`: findings, the status log and debugging recipes.
+
+## Status
+
+| Area | State |
+| --- | --- |
+| Codegen of `default.xex` + 4 Waves DLLs | Done (~24k functions, about 167 MB of C++) |
+| Native build (Linux, Clang) | Builds and links |
+| Boot | Kernel init, threads, cache partitions, fibers, RSA signature checks |
+| Intro video | Plays |
+| Title menu | Rendered geometry is present, textures not bound (black screen) |
+| Progression (cR/rank/Armory) | Code mapped, see [`docs/progression_re.md`](docs/progression_re.md) |
+| Online P2P, Forge/file share | Not started |
+
+See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debugging recipes.
+
+## Requirements
+
+- Linux x86-64 with a Vulkan 1.3 GPU (Windows support comes later)
+- Your own Halo: Reach Xbox 360 disc image (base version, no title update)
+- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) **v0.10.0** (install prefix, for example `~/rexglue-sdk/linux-amd64`)
+- Clang (tested with 23), CMake ≥ 3.25, Ninja, Python 3
+- Optional, for reverse engineering: Ghidra 12.1.4 with
+  [XEXLoaderWV](https://github.com/zeroKilo/XEXLoaderWV) and
+  [GhidraMCP](https://github.com/bethington/ghidra-mcp)
+
+## Building
+
+```sh
+# 1. Extract the game partition from your ISO (read-only on the ISO)
+python3 tools/xdvdfs_extract.py "Halo - Reach.iso" extract extracted/xbox360
+
+# 2. Configure (codegen runs automatically as part of the build)
+cmake -S reach-recomp -B reach-recomp/out/build/linux-release -G Ninja \
+  -DCMAKE_BUILD_TYPE=Release \
+  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_PREFIX_PATH=$HOME/rexglue-sdk/linux-amd64
+
+# 3. Build
+ninja -C reach-recomp/out/build/linux-release
+
+# 4. Run for N seconds (logs go to /tmp/reach_run.log)
+tools/run_reach.sh 60
+```
+
+Game saves and the emulated cache partitions are stored under `~/.local/share/reach/`.
+
+## Repository layout
+
+| Path | What |
+| --- | --- |
+| `reach-recomp/reach_manifest.toml` | Codegen manifest: main executable and guest DLL modules |
+| `reach-recomp/hints/` | Function boundary, entry point and native-replacement (`[rexcrt]`) hints |
+| `reach-recomp/src/` | Our runtime code: app setup, kernel overrides, cross-DLL thunks |
+| `reach-recomp/generated/` | Codegen output. **Not committed**, except the SDK's `rexglue.cmake` |
+| `tools/` | Extraction, analysis, run and debug tooling |
+| `docs/` | Project log, debugging recipes, reverse-engineering notes |
+
+## Legal
+
+This project is not affiliated with, endorsed by or sponsored by Microsoft, Xbox Game
+Studios, 343 Industries or Bungie. *Halo* and *Halo: Reach* are trademarks of
+Microsoft Corporation.
+
+The repository distributes no copyrighted game material: no executables, no
+recompiled game code, no maps, videos or other assets. The build only works with
+game files you extract from a copy you legally own.
+
+## Credits
+
+- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk): recompiler and runtime
+- [Xenia](https://github.com/xenia-canary/xenia-canary): the emulator the runtime's
+  kernel and GPU layers derive from, and our reference for differential debugging
+- [XenonRecomp](https://github.com/hedge-dev/XenonRecomp): the pioneering Xbox 360
+  static recompiler
+- [GhidraMCP](https://github.com/bethington/ghidra-mcp) and
+  [XEXLoaderWV](https://github.com/zeroKilo/XEXLoaderWV): reverse-engineering tooling
+
+## License
+
+The code in this repository is released under the [MIT License](LICENSE). This does
+not cover the game, its assets, or the third-party SDKs and tools it uses.
