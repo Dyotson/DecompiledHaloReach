@@ -6,8 +6,8 @@ plus the reverse-engineering notes and tooling needed to get it running.
 
 > **Status: early work in progress.** The recompiled game boots on Linux, creates its
 > threads, mounts its cache partitions, plays the intro Bink video and reaches the
-> title menu, but the menu currently renders black (textures are not being bound; see
-> [Status](#status)). It is not playable yet.
+> title menu, but the menu currently renders black (see
+> [`docs/menu_black_screen.md`](docs/menu_black_screen.md)). It is not playable yet.
 
 This repository contains **no game code and no game data**. You need your own copy of
 the game (see [Legal](#legal)).
@@ -47,7 +47,7 @@ the game (see [Legal](#legal)).
 | Native build (Linux, Clang) | Builds and links |
 | Boot | Kernel init, threads, cache partitions, fibers, RSA signature checks |
 | Intro video | Plays |
-| Title menu | Rendered geometry is present, textures not bound (black screen) |
+| Title menu | Reached and rendered every frame, but the final image is black (investigation in `docs/menu_black_screen.md`) |
 | Progression (cR/rank/Armory) | Code mapped, see [`docs/progression_re.md`](docs/progression_re.md) |
 | Online P2P, Forge/file share | Not started |
 
@@ -57,7 +57,8 @@ See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debuggi
 
 - Linux x86-64 with a Vulkan 1.3 GPU (Windows support comes later)
 - Your own Halo: Reach Xbox 360 disc image (base version, no title update)
-- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) **v0.10.0** (install prefix, for example `~/rexglue-sdk/linux-amd64`)
+- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) **0.10.0.24 nightly** (`nightly-20261002-bd833a2a`; v0.10.0 lacks
+  atomic/fence fixes). Install prefix, for example `~/rexglue-sdk-nightly/0.10.0.24/linux-amd64`
 - Clang (tested with 23), CMake ≥ 3.25, Ninja, Python 3
 - Optional, for reverse engineering: Ghidra 12.1.4 with
   [XEXLoaderWV](https://github.com/zeroKilo/XEXLoaderWV) and
@@ -70,15 +71,15 @@ See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debuggi
 python3 tools/xdvdfs_extract.py "Halo - Reach.iso" extract extracted/xbox360
 
 # 2. Configure (codegen runs automatically as part of the build)
-cmake -S reach-recomp -B reach-recomp/out/build/linux-release -G Ninja \
+cmake -S reach-recomp -B reach-recomp/out/build/linux-nightly -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER=clang++ \
-  -DCMAKE_PREFIX_PATH=$HOME/rexglue-sdk/linux-amd64
+  -DCMAKE_PREFIX_PATH=$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64
 
 # 3. Build
-ninja -C reach-recomp/out/build/linux-release
+ninja -C reach-recomp/out/build/linux-nightly
 
-# 4. Run for N seconds (logs go to /tmp/reach_run.log)
+# 4. Run for N seconds (logs go to /tmp/reach_run.log; the intro is skipped automatically)
 tools/run_reach.sh 60
 ```
 
@@ -94,6 +95,7 @@ Game saves and the emulated cache partitions are stored under `~/.local/share/re
 | `reach-recomp/generated/` | Codegen output. **Not committed**, except the SDK's `rexglue.cmake` |
 | `tools/` | Extraction, analysis, run and debug tooling |
 | `docs/` | Project log, debugging recipes, reverse-engineering notes |
+| `docs/symbols/` | Function names recovered in Ghidra (`address,name` CSV) |
 
 ## Legal
 

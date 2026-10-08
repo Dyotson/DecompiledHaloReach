@@ -6,12 +6,16 @@
 // with tools/frame_to_png.py. Run with --vulkan_readback_resolve=true so GPU
 // resolves are written back to guest memory; otherwise the dump shows whatever
 // the CPU last wrote there.
+//
+// REACH_RDCAPTURE="25" asks RenderDoc (when the game runs under renderdoccmd)
+// to capture the next frame at that time, without needing keyboard focus.
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
 #include <dlfcn.h>
+#include <renderdoc/renderdoc_app.h>
 
 #include <algorithm>
 #include <chrono>
@@ -97,6 +101,25 @@ void DumpFrontBuffer(uint8_t* base, uint32_t fetch_addr, double seconds, const s
               width, height, format, tiled, address, stem);
 }
 
+void MaybeTriggerRenderDocCapture(double now) {
+  static const double at = [] {
+    const char* v = std::getenv("REACH_RDCAPTURE");
+    return v ? std::atof(v) : -1.0;
+  }();
+  static bool done = false;
+  if (done || at < 0 || now < at) return;
+  done = true;
+  void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
+  auto get_api = lib ? reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(lib, "RENDERDOC_GetAPI")) : nullptr;
+  RENDERDOC_API_1_0_0* api = nullptr;
+  if (get_api && get_api(eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>(&api)) && api) {
+    api->TriggerCapture();
+    REXLOG_INFO("REACH_RDCAPTURE: RenderDoc capture triggered at t={:.2f}s", now);
+  } else {
+    REXLOG_WARN("REACH_RDCAPTURE: RenderDoc is not loaded (run under renderdoccmd capture)");
+  }
+}
+
 }  // namespace
 
 // void VdSwap(buffer_ptr, fetch_ptr, unk2, unk3, unk4, frontbuffer_ptr,
@@ -106,6 +129,8 @@ extern "C" REX_FUNC(__imp__VdSwap) {
   static const auto start = std::chrono::steady_clock::now();
   const uint32_t fetch_addr = ctx.r4.u32;
 
+  MaybeTriggerRenderDocCapture(
+      std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count());
   Schedule& schedule = GetSchedule();
   if (schedule.next < schedule.times.size() && fetch_addr) {
     double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();

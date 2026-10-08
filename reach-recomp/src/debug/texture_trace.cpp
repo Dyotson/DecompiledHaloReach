@@ -60,9 +60,13 @@ extern "C" REX_FUNC(sub_8216B0C8) {
       static std::mutex mutex;
       static std::set<uint32_t> seen;
       std::lock_guard lock(mutex);
-      if (seen.size() < 200 && seen.insert(static_cast<uint32_t>(ctx.lr)).second) {
-        REXLOG_INFO("REACH_TEXTRACE: valid SetTexture stage={} tex={:#010x} caller={:#010x}",
-                    ctx.r4.u32, tex, static_cast<uint32_t>(ctx.lr));
+      if (seen.size() < 400 && seen.insert(tex).second) {
+        // dw1: base address (bits 12..31) | format (bits 0..5); dw2: (h-1)<<13 | (w-1) for 2D.
+        REXLOG_INFO(
+            "REACH_TEXTRACE: valid SetTexture stage={} tex={:#010x} caller={:#010x} base={:#010x} "
+            "fmt={} size={}x{}",
+            ctx.r4.u32, tex, static_cast<uint32_t>(ctx.lr), dw[1] & 0xFFFFF000u, dw[1] & 0x3F,
+            (dw[2] & 0x1FFF) + 1, ((dw[2] >> 13) & 0x1FFF) + 1);
       }
     }
     if ((dw[0] & 3) != 2) {

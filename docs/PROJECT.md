@@ -69,6 +69,13 @@ Check exact param names in `endpoints.json` before calling.
   signatures with it). The game now plays the intro Bink video, then shows the (auto-answered)
   storage device selector and writes profile settings; after that the screen stays black.
 
+- 2026-10-08 (evening): moved to the ReXGlue 0.10.0.24 nightly (atomic `stwcx.`, fences, VMX
+  pack fix). Fixed a codegen bug where `bdz`/`bdzf` switch-chain tail calls were emitted as bare
+  `return`s (`hints/switch_tailcalls.toml` + `src/hooks/switch_tailcalls.cpp`). Ghidra analysis
+  repaired (no-return cascade, ~1.6k merged fragments); function names exported to
+  `docs/symbols/default_xex_functions.csv`. Credits/rank/Armory mapped in `docs/progression_re.md`.
+  Open blocker: the title menu renders black; see `docs/menu_black_screen.md`.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
@@ -86,6 +93,9 @@ Check exact param names in `endpoints.json` before calling.
 - Screenshots: `spectacle -b -n -a -o shot.png` while the game window is focused.
 - Kernel imports can be overridden from `src/` by defining `extern "C" REX_FUNC(__imp__Name)`
   (generated code calls `__imp__Name` directly; the executable's definition wins).
+- Shader stores (ours: `~/.local/share/reach/cache/shaders/shareable/4D53085B.xsh`, Xenia:
+  `~/.local/share/Xenia/cache_host/...`): `tools/xsh_fetches.py STORE [HASH..]` lists texture/vertex
+  fetch slots per shader; `--dump_shaders=<dir>` writes microcode disassembly.
 - Ghidra: `tools/ghidra_scripts/ReachFixSaveRestHelpers.java` repairs prologue-truncated
   functions (run via `/run_script_inline`; the headless server must be started with
   `GHIDRA_MCP_ALLOW_SCRIPTS=1`). Decompile endpoint is `/force_decompile`.
