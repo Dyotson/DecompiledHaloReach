@@ -1,0 +1,73 @@
+# Targets of `bdz`/`bdzf` switch chains that tail-call into the next function.
+# MSVC compiles small switches as `mtctr; bdz case0; bdz case1; ...`, and a
+# case that ends in `return f(...)` becomes a bdz straight into f. Codegen
+# (ReXGlue 0.10.0) translates such a conditional branch outside the current
+# function as a bare `return`, silently skipping f. Declare each target as a
+# function, and hook every site: the hook (src/hooks/switch_tailcalls.cpp)
+# evaluates the branch condition, performs the tail call itself and returns
+# true so the recompiled function returns (return_on_true).
+[functions]
+0x820D8F9C = { name = "sub_820D8F9C" }  # bdzf from 0x820D8DC0
+0x8244B364 = { name = "sub_8244B364" }  # bdz from 0x8244B2C8/D0/D4
+0x825E09CC = { name = "sub_825E09CC" }  # bdzf from 0x825E08C0/C8
+0x82631D14 = { name = "sub_82631D14" }  # bdzf from 0x82631854/58/5C
+
+[[midasm_hook]]  # bdzf -> 0x820D8F9C
+address = 0x820D8DC0
+name = "ReachTailCall_820D8DC0"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdz -> 0x8244B364
+address = 0x8244B2C8
+name = "ReachTailCall_8244B2C8"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdz -> 0x8244B364
+address = 0x8244B2D0
+name = "ReachTailCall_8244B2D0"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdz -> 0x8244B364
+address = 0x8244B2D4
+name = "ReachTailCall_8244B2D4"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdzf -> 0x82479CE8
+address = 0x82479A88
+name = "ReachTailCall_82479A88"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdzf -> 0x825E09CC
+address = 0x825E08C0
+name = "ReachTailCall_825E08C0"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdzf -> 0x825E09CC
+address = 0x825E08C8
+name = "ReachTailCall_825E08C8"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdzf -> 0x82631D14
+address = 0x82631854
+name = "ReachTailCall_82631854"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdzf -> 0x82631D14
+address = 0x82631858
+name = "ReachTailCall_82631858"
+registers = ["r3"]
+return_on_true = true
+
+[[midasm_hook]]  # bdzf -> 0x82631D14
+address = 0x8263185C
+name = "ReachTailCall_8263185C"
+registers = ["r3"]
+return_on_true = true
