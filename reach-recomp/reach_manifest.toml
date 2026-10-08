@@ -8,8 +8,37 @@ game_root = "../extracted/xbox360"
 [entrypoint]
 file_path = "../extracted/xbox360/default.xex"
 out_directory_path = "generated/default"
-includes = []
+includes = ["hints/indirect_entries.toml"]
 
 [entrypoint.functions]
 # Vtable-referenced tail thunk (b 0x82931248) not discovered by the scanner.
 0x829315D8 = { size = 4 }
+# Tail-call-only entry points the scanner never reached (only `b` into them).
+0x8213A0A0 = { name = "sub_8213A0A0" }
+# Full thread context save (GPRs, FPRs, VMX128) into the current thread block.
+0x8295DCE0 = { name = "ThreadContextSave_8295DCE0" }
+
+# Waves audio DSP modules loaded at runtime by the sound system.
+[[modules]]
+guest_path = "waveShell-Xbox.dll"
+file_path = "../extracted/xbox360/waveShell-Xbox.dll"
+out_directory_path = "generated/waveshell-xbox"
+includes = ["hints/waveshell-xbox.toml"]
+
+[[modules]]
+guest_path = "wavesLibDLL.dll"
+file_path = "../extracted/xbox360/wavesLibDLL.dll"
+out_directory_path = "generated/waveslibdll"
+includes = ["hints/waveslibdll.toml"]
+
+[[modules]]
+guest_path = "waves/L360.dll"
+file_path = "../extracted/xbox360/waves/L360.dll"
+out_directory_path = "generated/l360"
+includes = ["hints/l360.toml"]
+
+[[modules]]
+guest_path = "waves/Q10.dll"
+file_path = "../extracted/xbox360/waves/Q10.dll"
+out_directory_path = "generated/q10"
+includes = ["hints/q10.toml"]

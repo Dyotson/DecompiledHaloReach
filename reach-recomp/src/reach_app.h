@@ -4,7 +4,13 @@
 
 #pragma once
 
+#include <rex/filesystem/devices/host_path_device.h>
+#include <rex/filesystem/vfs.h>
+#include <rex/logging.h>
 #include <rex/rex_app.h>
+#include <rex/runtime.h>
+
+#include <filesystem>
 
 class ReachApp : public rex::ReXApp {
  public:
@@ -16,9 +22,30 @@ class ReachApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
+  void OnPreSetup(rex::RuntimeConfig& config) override {
+    if (!config.graphics && config.gpu_plugin.empty()) {
+      config.gpu_plugin = "xenos";
+    }
+  }
+
+  // Reach keeps preferences and streamed map/tag caches on the console's
+  // utility partitions; the game links cache0:/cache1: to these devices.
+  void OnPreLaunchModule() override {
+    auto* vfs = runtime()->file_system();
+    for (const char* name : {"cache0", "cache1"}) {
+      std::filesystem::path host = cache_root() / name;
+      std::error_code ec;
+      std::filesystem::create_directories(host, ec);
+      auto device = std::make_unique<rex::filesystem::HostPathDevice>(
+          std::string("\\Device\\") + name, host, false, true);
+      if (!device->Initialize() || !vfs->RegisterDevice(std::move(device))) {
+        REXLOG_ERROR("Failed to mount \\Device\\{} at {}", name, host.string());
+      }
+    }
+  }
+
   // Override virtual hooks for customization:
   // void OnPostInitLogging() override {}
-  // void OnPreSetup(rex::RuntimeConfig& config) override {}
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
   // void OnPostSetup() override {}
