@@ -56,3 +56,29 @@ Check exact param names in `endpoints.json` before calling.
 - 2026-10-08: ISO extracted. Both binaries imported + analyzed in Ghidra. ReXGlue codegen of
   `default.xex` succeeds (325 files, 167 MB C++) with one manual function hint; warnings in
   `reach-recomp/codegen-warnings.log`. First native build in progress.
+- 2026-10-08 (later): `reach` + the four Waves audio DLLs build and boot (GPU plugin xenos,
+  cache0/cache1 mounts, 375+ missed entry points pinned via `hints/`). Boot then died in an
+  endless null write on the ASYNC_0 thread (`sub_82602C28`): the statically linked XAPI fiber
+  code (`SwitchToFiber` = 0x8295DC48) swaps guest GPRs and "returns" into another fiber, which
+  recompiled code cannot do. Fixed by mapping the five XAPI fiber routines to the SDK's native
+  `rexcrt_*` fibers (`hints/rexcrt.toml`). Implemented `XeCryptBnQwNeRsaPubCrypt`
+  (`src/kernel/xecrypt_rsa.cpp`; the SDK stubs it on Linux, the game verifies RSA-2048
+  signatures with it). The game now plays the intro Bink video, then shows the (auto-answered)
+  storage device selector and writes profile settings; after that the screen stays black.
+
+## Debugging recipes
+
+- Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB).
+  `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.
+- Find the guest function behind an "Unhandled guest access violation": run under gdb with
+  `catch signal SIGSEGV` conditioned on `$_siginfo._sifields._sigfault.si_addr` (guest address
+  `X` is host `0x100000000 + X`); the backtrace shows `__imp__sub_XXXXXXXX` frames with
+  generated source lines. Other SIGSEGVs are normal (MMIO / GPU write watches), so pass them.
+- Stall diagnosis: `gdb -p $(pgrep -x reach) -batch -ex 'thread apply all bt 30'`; guest
+  frames appear as `sub_XXXXXXXX`.
+- Screenshots: `spectacle -b -n -a -o shot.png` while the game window is focused.
+- Kernel imports can be overridden from `src/` by defining `extern "C" REX_FUNC(__imp__Name)`
+  (generated code calls `__imp__Name` directly; the executable's definition wins).
+- Ghidra: `tools/ghidra_scripts/ReachFixSaveRestHelpers.java` repairs prologue-truncated
+  functions (run via `/run_script_inline`; the headless server must be started with
+  `GHIDRA_MCP_ALLOW_SCRIPTS=1`). Decompile endpoint is `/force_decompile`.
