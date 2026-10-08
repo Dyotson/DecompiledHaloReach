@@ -12,9 +12,11 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <map>
 #include <mutex>
 #include <set>
 #include <utility>
@@ -86,8 +88,43 @@ extern "C" REX_FUNC(sub_8216B0C8) {
 // desync that leaves the stage unbound.
 REX_EXTERN(__imp__sub_8216AD90);
 
+namespace {
+// Per-caller counts of set_texture handles: 0 (texture ref without a texture,
+// typically not resident), -1 (deliberate unbind) and real textures.
+struct HandleStats {
+  uint64_t zero = 0, unbind = 0, real = 0;
+};
+std::mutex g_handle_mutex;
+std::map<uint32_t, HandleStats> g_handle_stats;
+uint64_t g_handle_calls = 0;
+
+void RecordHandle(uint32_t caller, uint32_t handle) {
+  std::lock_guard lock(g_handle_mutex);
+  auto& st = g_handle_stats[caller];
+  (handle == 0 ? st.zero : handle == 0xFFFFFFFFu ? st.unbind : st.real)++;
+  static auto last = std::chrono::steady_clock::now();
+  ++g_handle_calls;
+  auto now = std::chrono::steady_clock::now();
+  if (now - last > std::chrono::seconds(5)) {
+    last = now;
+    REXLOG_WARN("REACH_TEXTRACE: set_texture total calls {}", g_handle_calls);
+    for (const auto& [lr, s] : g_handle_stats) {
+      REXLOG_WARN("REACH_TEXTRACE: set_texture caller={:#010x} zero={} unbind={} real={}", lr,
+                  s.zero, s.unbind, s.real);
+    }
+  }
+}
+}  // namespace
+
+// Guest pointers below 0x40000000 are not backed by the heaps the engine
+// uses; reading them from the host faults.
+bool PlausibleGuestPointer(uint32_t addr) { return addr >= 0x40000000u; }
+
 extern "C" REX_FUNC(sub_8216AD90) {
-  if (Enabled()) {
+  if (Enabled() && PlausibleGuestPointer(ctx.r4.u32)) {
+    RecordHandle(static_cast<uint32_t>(ctx.lr), LoadBE32(base + ctx.r4.u32));
+  }
+  if (Enabled() && PlausibleGuestPointer(ctx.r4.u32)) {
     const uint32_t stage = ctx.r3.u32;
     const uint32_t handle = LoadBE32(base + ctx.r4.u32);
     if (stage < 26 && handle != 0 && handle != 0xFFFFFFFFu) {
