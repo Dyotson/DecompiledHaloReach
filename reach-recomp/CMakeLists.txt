@@ -13,6 +13,7 @@ include(generated/rexglue.cmake)
 # Sources
 set(REACH_SOURCES
     src/main.cpp
+    src/kernel/xecrypt_rsa.cpp
 )
 
 if(WIN32)

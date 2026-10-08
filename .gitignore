@@ -4,3 +4,5 @@ extracted/
 ghidra_projects/
 reach-recomp/out/
 reach-recomp/generated/default/
+.claude/settings.local.json
+reach-recomp/generated/*/

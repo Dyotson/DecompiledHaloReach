@@ -1,0 +1,12 @@
+# Statically linked XAPI routines replaced by native SDK implementations.
+[rexcrt]
+# Fibers. The guest versions save/restore GPRs and return into another fiber's
+# LR, which cannot work for recompiled code (the host stack does not move).
+# Layout matches XAPI: KTHREAD(+0x100 from PCR)+0x164 holds the current fiber,
+# whose first word is the fiber data (GetFiberData). The ASYNC_0 I/O thread
+# runs its decompressor as a fiber (caller sub_82602C28).
+ConvertThreadToFiber = 0x8295DA28
+ConvertFiberToThread = 0x8295DAB8
+CreateFiber = 0x8295DB08
+DeleteFiber = 0x8295DBE8
+SwitchToFiber = 0x8295DC48
