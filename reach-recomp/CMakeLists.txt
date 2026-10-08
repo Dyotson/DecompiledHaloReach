@@ -13,6 +13,7 @@ include(generated/rexglue.cmake)
 # Sources
 set(REACH_SOURCES
     src/main.cpp
+    src/debug/frame_dump.cpp
     src/hooks/switch_tailcalls.cpp
     src/kernel/input_autopress.cpp
     src/kernel/xecrypt_rsa.cpp
