@@ -1,0 +1,241 @@
+# P2P online: findings and plan
+
+Status: research only (2026-10-09). Nothing below is implemented yet. "Guess" marks
+statements not confirmed by code or a run.
+
+References used:
+
+- SDK: ReXGlue `~/rexglue-sdk-src/sdk` at `bd833a2` (the nightly we build against).
+- Xenia Canary `82d0cd1f4` (our GPU reference).
+- The Xenia netplay fork, AdrianCassar/xenia-canary branch `netplay_canary_experimental` at
+  `6dbaa1fefd` (2026-09-10). It is BSD licensed like Xenia, so its code can be ported with
+  attribution.
+- Guest addresses are in `default.xex`, from the generated code and the Ghidra MCP server.
+
+## 1. What Reach imports
+
+Only `default.xex` imports networking; the four guest DLLs import none. The import thunks
+are in `reach-recomp/generated/default`.
+
+**Sockets:**
+
+- `NetDll_WSAStartup`, `WSACleanup`, `WSAGetLastError`, `__WSAFDIsSet`
+- `socket`, `bind`, `connect`, `listen`, `accept`, `select`, `setsockopt`, `ioctlsocket`
+- `send`, `recv`, `sendto`, `recvfrom`, `shutdown`, `closesocket`, `inet_addr`
+
+**XNet:**
+
+- `XNetStartup`, `XNetCleanup`, `XNetRandom`
+- `XNetGetEthernetLinkStatus`, `XNetGetTitleXnAddr`
+- `XNetCreateKey`, `XNetRegisterKey`, `XNetUnregisterKey`
+- `XNetXnAddrToInAddr`, `XNetInAddrToXnAddr`, `XNetUnregisterInAddr`, `XNetXnAddrToMachineId`
+- `XNetConnect`, `XNetGetConnectStatus`, `XNetServerToInAddr`
+- `XNetQosListen`, `XNetQosLookup`, `XNetQosServiceLookup`, `XNetQosRelease`,
+  `XNetQosGetListenStats`
+- `XNetLogonGetMachineID`, `XNetLogonGetTitleID`
+
+**XAM:**
+
+- `XamSessionCreateHandle`, `XamSessionRefObjByHandle`
+- `XamVoiceCreate`, `XamVoiceSubmitPacket`, `XamVoiceHeadsetPresent`, `XamVoiceClose`
+- `XamUserAreUsersFriends`, `XamShowFriendRequestUI`
+
+**XSession / XUser.** These have no imports of their own: the XDK library compiles them into
+`XMsgStartIORequest` / `XMsgInProcessCall` messages to the XAM "apps". The call sites and IDs
+come from the `li r3` / `lis+ori r4` sequences in front of each call:
+
+| App | Message | Wrapper | Meaning (from the SDK / Xenia handlers) |
+| --- | --- | --- | --- |
+| 0xFB XGI | 0xB0006, 0xB0007, 0xB0008 | 82803580, 82803610, 82803490 | UserSetContext, UserSetProperty, WriteAchievements |
+| 0xFB | 0xB0010 | 829219C0 | XSessionCreate (after `XamSessionCreateHandle`) |
+| 0xFB | 0xB0011 | 82921C30 | XSessionDelete |
+| 0xFB | 0xB0012 | 82921CE0 | XSessionJoinLocal/Remote |
+| 0xFB | 0xB0013 | 82921D90 | probably XSessionLeave (guess from numbering). **The SDK has no case**: logs "Unimplemented XGI message" and returns X_E_FAIL (`apps/xgi_app.cpp:450`) |
+| 0xFB | 0xB0014, 0xB0015 | 82921F18, 82921FB8 | XSessionStart, XSessionEnd |
+| 0xFB | 0xB0018, 0xB001A, 0xB001D, 0xB001E | 82921B70, 82921E38, 82922920, 82922A50 | Modify, ArbitrationRegister, GetDetails, MigrateHost |
+| 0xFB | 0xB0021, 0xB0025 | 82803740, 82922180 | UserReadStats, SessionWriteStats |
+| 0xFB | 0xB0060, 0xB0065, 0xB0071 | 82922240, 82922068, 82803508 | SearchByIds, SearchWeighted, AwardAvatarAssets |
+| 0xFC XLiveBase | 0x58004, 0x58006, 0x5800E, 0x58019, 0x5801E, 0x58020, 0x58023, 0x58044, 0x58046 | 82922548, 820BA2E8, 82922878, 82921248, 82921500, 82920A90, 82920BF0, 82921640, 829213C8 | LogonId, NAT type, friends/presence (Live only) |
+| 0xFA XMP, 0xFE XAM | 0x7001A/B, 0x21012, 0x20021 | | music player, guest sign-in, device type |
+
+The game drives all XSession calls from one task dispatcher, `sub_82301800`:
+
+| Op | Calls |
+| --- | --- |
+| 0 | Create: game flags are mapped to XSESSION_CREATE_* bits; gated by `Function_821E76B0`, possibly "is a Live session" (guess) |
+| 1 | GetDetails, then Delete |
+| 2 | MigrateHost |
+| 3 | Modify |
+| 4 | Join |
+| 5 | Leave |
+| 6 | Start |
+| 7 | End |
+
+`sub_822B7608` calls Join/Leave/Modify directly too.
+
+## 2. What the SDK does with them today
+
+| Area | SDK behaviour (`src/kernel/xam/xam_net.cpp`, `src/system/xsocket.cpp`) | Effect on Reach |
+| --- | --- | --- |
+| Link status | `XNetGetEthernetLinkStatus` returns 0 (`:508`) | `sub_822738D0`, which creates a session key, only succeeds when the link status is non-zero **and** `XNetCreateKey` returns 0. Otherwise only offline sessions exist, so System Link cannot work |
+| XNADDR | `XNetGetTitleXnAddr`: loopback IP, MAC `CC×6` for every instance (`:438`) | two instances would look identical |
+| Address mapping | `XNetXnAddrToInAddr` / `InAddrToXnAddr` return 1 (failure) (`:481`, `:488`) | `Function_82273988` turns a peer's XNADDR into an IP:port; it fails |
+| Keys, connect | `XNetCreateKey`, `RegisterKey`, `UnregisterKey`, `Connect`, `GetConnectStatus`, `QosLookup`, `ServerToInAddr`, `UnregisterInAddr`, `QosGetListenStats` are `REX_EXPORT_STUB` (`:1036-1054`) | `REX_STUB` leaves r3 untouched, so each "returns" its first argument: the XDK wrappers' caller id, 1, which reads as failure |
+| QoS | `XNetQosListen` returns `X_ERROR_FUNCTION_FAILED` (`:560`); `XNetQosServiceLookup` succeeds with no data | |
+| Sockets | Real host sockets. VDP (protocol 254) becomes plain UDP (`xsocket.cpp:50`). The secure-key options 0x5801/0x5802 are swallowed; `SO_BROADCAST` passes through. No XNet encryption and no port remapping (`xsocket.cpp:117`) | Binding 1000/1001 fails for a normal user: `net.ipv4.ip_unprivileged_port_start` is 1024 on this host |
+| XSession | The XGI handlers log their arguments and return success without filling `XSESSION_INFO` or the nonce (`apps/xgi_app.cpp:96-116`); 0xB0013 fails; `XamSessionRefObjByHandle` returns a dummy object (`xam_user.cpp:720`) | Fine for offline; a host would advertise an empty session id/key |
+| Identity | Every instance has XUID `0xB13EBABEBABEBABE` (`src/system/xam/user_profile.cpp:28`) | two local instances collide |
+
+Xenia Canary mainline `82d0cd1f4` is not better here: `xam_net.cc` and `apps/xgi_app.cc` have
+the same stubs. The XSession messages say "implemented in netplay".
+
+The netplay fork has the missing layer:
+
+- **XNet** (`src/xenia/kernel/xam/xam_net.cc`, 2,723 lines):
+  - `XNetGetEthernetLinkStatus` returns ACTIVE | 100MBPS | FULL_DUPLEX unless offline (`:1064`).
+  - `XNetGetTitleXnAddr` fills the real LAN IP, the public IP and a persistent MAC (`:696`).
+  - `XNetXnAddrToInAddr` returns `xnaddr.ina` in System Link mode and `inaOnline` in Live mode;
+    its own MAC maps to loopback (`:882`).
+  - `XNetCreateKey` generates a session id with type `XNKID_SYSTEM_LINK` (0x00 in the top
+    nibble, `xnet.h:1508`) (`:2615`).
+  - `XNetRegisterKey` records the System Link id (`:2628`).
+  - `XNetConnect` sleeps 150 ms and succeeds (`:786`); `GetConnectStatus` returns CONNECTED
+    (`:796`).
+  - QoS lookups go through the server.
+- **Sockets** (`xsocket.cc`, 1,365 lines): guest-to-host port remapping on
+  bind/connect/sendto/recvfrom (`:256`, `:280`, `:516`, `:1208`; tables in `upnp.h:137-143`),
+  plus UPnP port forwarding.
+- **Sessions** (`xsession.cc`, 1,367 lines): System Link and Live sessions.
+- **Live backend** (`XLiveAPI.cpp`, 2,606 lines): a central web service (`api_address`, default
+  list `xenia-netplay-...herokuapp.com`) for matchmaking, sessions, QoS data, friends and
+  presence.
+- **Modes**: `network_mode` 0 offline / 1 System Link / 2 Live (`XLiveAPI.cpp:41`);
+  `bind_interface` picks the adapter, for tunnels/VPNs.
+
+What a port would take: our SDK keeps Xenia's structure (`XSocket`, XGI/XLiveBase apps,
+`REX_EXPORT` entry points), so these functions move over almost one-to-one. We can't change the
+SDK binary's exports, so they would live either in `patches/rexglue-sdk` or as `__imp__`
+overrides in `reach-recomp/src/` (the pattern of `xam_signin.cpp` and `xam_keyboard.cpp`).
+Overrides avoid rebuilding `librexruntime.so`, which we don't ship (see
+`tools/build_rexglue_sdk.sh`). The SDK's XGI and XSocket internals are reachable from our code
+only through exported symbols, so a self-contained net layer in our tree is simpler than
+patching them.
+
+## 3. How Reach's system link works (as far as the code shows)
+
+- **Endpoints.** `sub_822F9F98` opens two endpoints through `sub_822F9D80`:
+  - port **1000** with transport mode 1;
+  - port **1001** with mode 0 and the flag that makes `sub_822F9D80` set
+    `SO_BROADCAST` (`setsockopt(s, 0xFFFF, 0x20)`).
+- **Socket modes.** `sub_822A5020` maps mode 0 to UDP (17), mode 1 to **VDP (254)** and mode 2
+  to TCP (6), all over AF_INET. So game traffic is VDP on 1000 and discovery is UDP broadcast
+  on 1001 (the broadcast-to-1001 detail is a guess from the flags, but consistent).
+- **Transport flags.** Both endpoints require the flags at 0x82BD2820/0x82BD2821.
+  `sub_82274328` initialises the transport: `XNetStartup` with 16 datagram sockets, 24 stream
+  sockets, 10 key registrations and 75 security associations, then `WSAStartup`.
+  `sub_822742C0` polls the link status: bit 0 means active, and bit 5 (wireless) is stored at
+  0x82BD2823. `Function_822741F8` shuts the transport down.
+- **Out-of-band message types** (`Function_823262C0`):
+
+  | Type | Name | Size |
+  | --- | --- | --- |
+  | 0 | `ping` | 12 bytes |
+  | 1 | `pong` | 12 bytes |
+  | 2 | `broadcast-search` | 16 bytes |
+  | 3 | `broadcast-reply` | 0x1280 bytes (presumably the game description) |
+
+  Session messages follow, as in Halo 3: `connect-request/refuse/establish/closed`,
+  `join-request`, `peer-connect`, `join-refuse/abort`, `leave-session`, `session-boot/disband`,
+  `host-handoff`, `membership-update`, `peer-properties`, `parameters-update/request`, and so
+  on (strings at 0x82051F94..0x820524D8).
+- **Addressing.** A peer is addressed by XNADDR plus session id: `Function_82273988` calls
+  `XNetXnAddrToInAddr(xnaddr, xnkid)` and builds {IP, port, family 4} from the result. The host
+  creates the session key with `XNetCreateKey` (`sub_822738D0`); joiners register it with
+  `XNetRegisterKey` (`sub_822B8E20`, `sub_822B91F0`) and connect with `XNetConnect`
+  (`sub_82273B80`, `sub_822AB038`).
+- **QoS.** `XNetQosListen` (4 sites) / `XNetQosLookup` (`sub_8226D1D0`) are probably only used
+  by Live matchmaking (strings `qos-*`, `matchmaking-*`); the broadcast reply carries what system
+  link needs (guess).
+- **No encryption is needed between our own instances.** On a 360, XNet encrypts VDP with the
+  registered key. Between two copies of this port, both ends skip that, so VDP payloads (2-byte
+  game-data length + data + voice) can pass through unchanged. Talking to real 360s or Xenia is
+  out of scope.
+
+## 4. Plan
+
+Design choice: a small **virtual network layer** in `reach-recomp/src/net/`, not raw host
+sockets.
+
+- **One host UDP socket per instance.** The guest sockets (ports 1000/1001, plus any the game
+  opens later) are multiplexed over it with a 4-byte header: guest source port and destination
+  port.
+- **Virtual addresses.** Every instance gets a virtual IPv4 (e.g. `10.77.0.N`) and a unique MAC
+  for its XNADDR. `XNetXnAddrToInAddr` returns the virtual IP; the layer maps it to the peer's
+  real `ip:port`.
+- **Broadcast** to `255.255.255.255:1001` is sent to every known peer.
+- **Why this shape.**
+  - No privileged ports and no port collisions, so two instances run on one machine.
+  - Only one port to forward or hole-punch.
+  - LAN and internet differ only in how peers are found: local broadcast on the host port vs a
+    rendezvous server.
+
+Milestones:
+
+- **M0 – observe.** Make every XNet/XSession/socket call log at info level (our `__imp__`
+  overrides can wrap the SDK). Record the sequence when the lobby's "Select Network" (Y) is
+  opened and System Link is chosen. Confirm what greys out System Link today (expected: link
+  status 0).
+- **M1 – System Link available on one instance.** Override:
+  - `XNetGetEthernetLinkStatus` → `0x0B`;
+  - `XNetGetTitleXnAddr` → virtual IP, a per-instance MAC and STATIC|ETHERNET flags;
+  - `XNetCreateKey`, `RegisterKey`, `UnregisterKey`, `XnAddrToInAddr`, `InAddrToXnAddr`,
+    `UnregisterInAddr` (map-based), plus `Connect` and `GetConnectStatus`;
+  - `XNetQosListen` → success.
+
+  Add the XGI 0xB0013 handler and fill `XSESSION_INFO` (id, host XNADDR, key) in
+  XSessionCreate in case System Link uses it (find out in M0). Add per-instance identity:
+  `REACH_XUID` / gamertag overrides, and separate profiles via `--user_data_root` or
+  `XDG_DATA_HOME` (`runtime.cpp:32`, `filesystem_posix.cpp:108`).
+
+  Done when a System Link lobby can be hosted and the 1000/1001 endpoints are bound through the
+  virtual layer.
+- **M2 – two instances see each other on one machine.** Use a static peer list from an env var.
+  Done when instance B's System Link browser lists A's game (`broadcast-search` /
+  `broadcast-reply` observed in the log). Drive both with `REACH_AUTOPRESS_FIFO`, one FIFO
+  each.
+- **M3 – a game starts and plays.** Join, membership updates, map load, gameplay, ending, host
+  leaving / host migration. Measure bandwidth and latency through the layer.
+- **M4 – internet.** A small rendezvous service: rooms with a code, each instance registers the
+  public endpoint the server observes, UDP hole punching through it, and a relay fallback for
+  symmetric NAT. Sketch it in Python/Go, self-hostable; no Microsoft services. Optionally add
+  UPnP, as in the fork.
+- **M5 – polish.**
+  - Room and peer UI.
+  - Voice: `XamVoice*` are SDK stubs today, so VDP voice payloads would need a host voice path.
+  - Version checks: the game already rejects mismatched builds (`host-version-too-low`).
+
+Testing on one machine:
+
+- Two instances need about 2 × 6 GB RAM and 2 × 5 GB of `/dev/shm`, which is a 16 GB tmpfs
+  here. Both instances also share the GPU.
+- With the virtual layer no namespaces are needed: give each instance its own host port.
+- To test raw sockets instead, user namespaces are enabled (`max_user_namespaces` = 125748), so
+  `unshare --user --map-root-user --net` gives each instance its own network stack. Inside it,
+  binding port 1000 is allowed. Linking two namespaces needs a veth pair created inside a shared
+  user namespace, or `slirp4netns`.
+
+Risks:
+
+- The game may expect XNet behaviour our stubs don't show: connect status transitions, key
+  limits (10 registered keys), or `XNetUnregisterInAddr` timing.
+- Session creation may need a real `XSESSION_INFO` even on System Link (open; M0 answers it).
+- The intermittent runtime hang seen when entering the Forge lobby (`docs/PROJECT.md`) would
+  also hit network sessions.
+- Determinism and simulation model: not investigated. Both ends run the same binary, so
+  differences between the recompilation and a 360 do not matter between our own instances.
+- Interoperability with real consoles, Xenia or Xenia netplay is not a goal; it would need
+  XNet encryption, or the fork's server protocol.
+
+Possibly useful later: the Ghidra project also has `haloreach.dll` open (MCC's PC build, with
+its own network layer). It may help name Blam network functions; it is not needed for the
+plan above.
