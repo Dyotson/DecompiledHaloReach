@@ -16,6 +16,7 @@ set(REACH_SOURCES
     src/debug/frame_dump.cpp
     src/debug/gamestate_trace.cpp
     src/debug/texture_trace.cpp
+    src/hooks/mouse_look.cpp
     src/hooks/offline_challenges.cpp
     src/hooks/switch_tailcalls.cpp
     src/kernel/file_delete_on_close.cpp
@@ -26,6 +27,7 @@ set(REACH_SOURCES
     src/kernel/xam_keyboard.cpp
     src/kernel/xam_signin.cpp
     src/kernel/xecrypt_rsa.cpp
+    src/input/kbm.cpp
 )
 
 if(WIN32)

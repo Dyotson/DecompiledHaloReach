@@ -1,0 +1,21 @@
+# Mouse look straight into player control (src/hooks/mouse_look.cpp, docs/input.md).
+# All three are in sub_8247C978 (player control, per local player; r15 = controller,
+# r27 = unit-control output). The hooks run before the instruction at `address`.
+
+# After sub_82484108 ("flying", r3) on the branch where the player has look control.
+[[midasm_hook]]
+address = 0x8247D6D8
+name = "ReachMouseLookBegin"
+registers = ["r15", "r3"]
+
+# Zoomed: f0 = 1 / magnification, about to scale the stick's yaw/pitch rates.
+[[midasm_hook]]
+address = 0x8247D8B8
+name = "ReachMouseLookZoom"
+registers = ["r15", "f0"]
+
+# After the tick's yaw/pitch change is stored at r27+0x14/+0x18: add the mouse.
+[[midasm_hook]]
+address = 0x8247DD20
+name = "ReachMouseLookApply"
+registers = ["r15", "r27"]

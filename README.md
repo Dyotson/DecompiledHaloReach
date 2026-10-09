@@ -53,6 +53,7 @@ the game (see [Legal](#legal)).
 | Forge | Works locally: editing on Sword Base, object placement, saving map variants |
 | Online P2P | System Link games work over the internet through a self-hosted **Reach Live** server: players see each other's games in the System Link browser, join and play Firefight; direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Tested with two instances on one machine. Xbox Live features (matchmaking, parties, file share) are next |
 | File share | Not started |
+| Keyboard and mouse | On by default next to pads: Halo-style bindings (rebindable `kbm_bind_*` cvars) and raw mouse look fed straight into player control, no stick emulation ([`docs/input.md`](docs/input.md)) |
 
 See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debugging recipes.
 

@@ -10,6 +10,8 @@
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
 
+#include "input/kbm.h"
+
 #include <filesystem>
 
 class ReachApp : public rex::ReXApp {
@@ -26,6 +28,8 @@ class ReachApp : public rex::ReXApp {
     if (!config.graphics && config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";
     }
+    // Keyboard and mouse on guest user 0, next to the SDK's pads (docs/input.md).
+    config.input_factory = reach::kbm::CreateInputSystem;
   }
 
   // Reach keeps preferences and streamed map/tag caches on the console's

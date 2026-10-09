@@ -203,6 +203,15 @@ Check exact param names in `endpoints.json` before calling.
   two-player match). Each player gets a persistent online identity
   (`src/kernel/identity.cpp`). `docs/online_plan.md` section 5.
 
+- 2026-10-09 (late night): **keyboard and mouse.** A synthetic device on guest user 0
+  (`src/input/kbm.cpp`, merged with any pad) with bindings for Reach's Default layout, and
+  mouse look applied as an angle inside player control (`sub_8247C978`) after the stick's
+  acceleration and turn-rate cap, keeping zoom scaling and inversion
+  (`src/hooks/mouse_look.cpp`, `hints/mouse_look.toml`). Verified with the FIFO's new
+  `MOUSE:dx,dy` / `KEY:name` commands: 1636 counts turn exactly 90° (30° through the 3x DMR
+  scope), pitch clamps at straight up/down, fire/zoom/swap/jump/crouch/move and menu keys work.
+  `docs/input.md`.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

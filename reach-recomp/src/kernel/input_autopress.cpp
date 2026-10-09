@@ -13,6 +13,13 @@
 // arrives, so menus can be stepped through while watching frame dumps
 // (REACH_FRAMEDUMP_TRIGGER). In either mode the game sees a connected, centred
 // controller between presses instead of a disconnected one.
+//
+// The FIFO also drives the keyboard and mouse device (src/input/kbm.cpp) through the same
+// paths as the real ones: "KEY:name[:hold]" holds a key or mouse button by its binding name
+// ("Space", "LMB", "WheelUp"; 0.3 s by default), "MOUSE:dx,dy" moves the mouse by that many
+// counts.
+
+#include "../input/kbm.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -24,6 +31,7 @@
 
 #include <chrono>
 #include <cstdint>
+#include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <mutex>
@@ -130,6 +138,29 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
       continue;
     }
     double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    if (line.rfind("MOUSE:", 0) == 0) {
+      float dx = 0, dy = 0;
+      if (std::sscanf(line.c_str() + 6, "%f,%f", &dx, &dy) == 2) {
+        reach::kbm::InjectMouse(dx, dy);
+      }
+      REXLOG_INFO("REACH_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
+      line.clear();
+      continue;
+    }
+    if (line.rfind("KEY:", 0) == 0) {
+      std::string key = line.substr(4);
+      double hold = kDefaultHoldSeconds;
+      if (size_t colon = key.find(':'); colon != std::string::npos) {
+        hold = std::atof(key.c_str() + colon + 1);
+        key.resize(colon);
+      }
+      if (!reach::kbm::InjectKey(key, hold)) {
+        REXLOG_WARN("REACH_AUTOPRESS_FIFO: unknown key {}", key);
+      }
+      REXLOG_INFO("REACH_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
+      line.clear();
+      continue;
+    }
     std::vector<Press> parsed = ParseSchedule(("0:" + line).c_str());
     for (Press& press : parsed) {
       press.at_seconds = now;
