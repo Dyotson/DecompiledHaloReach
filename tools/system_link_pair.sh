@@ -3,7 +3,10 @@
 # main menu with A's party selected ("Join User" is then X on B).
 #
 # Usage: tools/system_link_pair.sh DIR_A DIR_B [extra reach flags...]
-#   Stops every running reach first. Needs about 12 GB of RAM and 10 GB of /dev/shm.
+#   Stops the instances a previous run started in DIR_A / DIR_B first. Needs about 12 GB
+#   of RAM and 10 GB of /dev/shm.
+#   With REACH_SERVER=host[:port] both connect to that Reach Live server instead
+#   (profiles in DIR_A/data and DIR_B/data, gamertags REACH_GAMERTAG_A / _B).
 #   Then: echo X:0.3 > DIR_B/in.fifo   to join; tools/live_step.sh DIR 0.3 for screenshots.
 #   REACH_NETTRACE=packets (or 1) is passed through for network logging.
 #   B keeps its profile in DIR_B/data. A fresh profile starts with the game's first-run
@@ -13,15 +16,28 @@ set -u
 TOOLS="$(cd "$(dirname "$0")" && pwd)"
 A="$1"; B="$2"; shift 2
 
-for p in $(ps -o pid= -C reach); do kill -INT "$p"; done; sleep 10
-for p in $(ps -o pid= -C reach); do kill -KILL "$p"; done; sleep 2
+stop() {  # the instance a previous run started in DIR, if it still runs
+    local pid game; pid=$(cat "$1/pid" 2>/dev/null) || return 0  # its `timeout` wrapper
+    [ "$(ps -o comm= -p "$pid")" = timeout ] || return 0
+    game=$(ps -o pid= --ppid "$pid")
+    [ -n "$game" ] || return 0
+    kill -INT $game; sleep 10; kill -KILL $game 2>/dev/null; sleep 2
+}
+stop "$A"; stop "$B"
 for shm in /dev/shm/xenia_memory_*; do
     [ -O "$shm" ] || continue
     grep -qs "$(basename "$shm")" /proc/[0-9]*/maps || rm -f -- "$shm"
 done
 
-REACH_NET=1 "$TOOLS/live_session.sh" "$A" 1800 --headless=true "$@"
-REACH_NET=1 REACH_INSTANCE=2 "$TOOLS/live_session.sh" "$B" 1800 --headless=true "$@"
+if [ -n "${REACH_SERVER:-}" ]; then  # both on a Reach Live server, each with its own profile
+    REACH_INSTANCE="${REACH_INSTANCE_A:-2}" REACH_GAMERTAG="${REACH_GAMERTAG_A:-Noble Six}" \
+        "$TOOLS/live_session.sh" "$A" 1800 --headless=true "$@"
+    REACH_INSTANCE="${REACH_INSTANCE_B:-3}" REACH_GAMERTAG="${REACH_GAMERTAG_B:-Kat}" \
+        "$TOOLS/live_session.sh" "$B" 1800 --headless=true "$@"
+else
+    REACH_NET=1 "$TOOLS/live_session.sh" "$A" 1800 --headless=true "$@"
+    REACH_NET=1 REACH_INSTANCE=2 "$TOOLS/live_session.sh" "$B" 1800 --headless=true "$@"
+fi
 sleep 55
 
 step() { "$TOOLS/live_step.sh" "$@" > /dev/null; }

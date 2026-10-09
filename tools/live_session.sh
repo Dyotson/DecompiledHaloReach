@@ -7,9 +7,10 @@
 #   they arrive; touching DIR/dump.trigger dumps the next frame.
 #
 # Environment:
-#   REACH_INSTANCE=2  a second instance on the same machine: its own profile and saves
-#                     (XDG_DATA_HOME=DIR/data), XUID and gamertag (override with
-#                     REACH_XUID / REACH_GAMERTAG). Use REACH_NET=1 on both for System Link.
+#   REACH_INSTANCE=N  (N >= 2) another instance on the same machine: its own profile and
+#                     saves (XDG_DATA_HOME=DIR/data), XUID and gamertag (override with
+#                     REACH_XUID / REACH_GAMERTAG). Use REACH_NET=1 on both for System Link,
+#                     or REACH_SERVER=host[:port] for a Reach Live server.
 #   REXSDK            SDK prefix (default: the patched overlay, as tools/run_reach.sh).
 # The game runs in the background; stop it with kill -INT on its PID (never pkill -f).
 set -u
@@ -20,10 +21,13 @@ shift 2 2>/dev/null || shift $#
 rm -f "$DIR/in.fifo" "$DIR/dump.trigger" "$DIR"/reach_frame_*.bin "$DIR"/reach_frame_*.json
 mkfifo "$DIR/in.fifo"
 
-if [ "${REACH_INSTANCE:-1}" = 2 ]; then
+N="${REACH_INSTANCE:-1}"
+if [ "$N" != 1 ]; then
     export XDG_DATA_HOME="$DIR/data"
-    export REACH_XUID="${REACH_XUID:-E00000000000B002}"
-    export REACH_GAMERTAG="${REACH_GAMERTAG:-Spartan2}"
+    if [ -z "${REACH_SERVER:-}" ]; then  # a Reach Live server gives each its own identity
+        export REACH_XUID="${REACH_XUID:-E00000000000B00$N}"
+        export REACH_GAMERTAG="${REACH_GAMERTAG:-Spartan$N}"
+    fi
 fi
 DEFAULT_SDK="$HOME/rexglue-sdk-patched/0.10.0.24/linux-amd64"
 [ -d "$DEFAULT_SDK/lib" ] || DEFAULT_SDK="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
@@ -34,4 +38,5 @@ REACH_FRAMEDUMP_TRIGGER="$DIR/dump.trigger" REACH_FRAMEDUMP_DIR="$DIR" \
 LD_LIBRARY_PATH="${REXSDK:-$DEFAULT_SDK}/lib:$PWD" nohup timeout --signal=INT "$SECS" \
     ./reach --game_data_root="$ROOT/extracted/xbox360" --log_file="$DIR/reach.log" \
     --log_level="${REACH_LOG_LEVEL:-info}" --vulkan_readback_resolve=true "$@" > "$DIR/run.out" 2>&1 &
+echo $! > "$DIR/pid"  # the `timeout` wrapper; the game is its child
 echo "started pid $! in $DIR"

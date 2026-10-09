@@ -24,6 +24,8 @@
 // weekly set made the map loader fault), with set ids derived from the string.
 // REACH_OFFLINE_CHALLENGES=0 turns all of this off. Addresses: docs/progression_re.md.
 
+#include "../kernel/identity.h"
+
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -152,21 +154,13 @@ int PickChallenge(PPCContext& ctx, uint8_t* base, uint8_t category, uint64_t see
 }
 
 std::filesystem::path SavePath() {
-  std::string root;
-  if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-    root = xdg;
-  } else if (const char* home = std::getenv("HOME")) {
-    root = std::string(home) + "/.local/share";
-  }
-  uint64_t xuid = 0;
-  if (const char* v = std::getenv("REACH_XUID"); v && *v) {
-    xuid = std::strtoull(v, nullptr, 16);
-  } else if (auto* profile = rex::system::kernel_state()->user_profile()) {
-    xuid = profile->xuid();
+  uint64_t xuid = reach::IdentityXuid();
+  if (!xuid) {
+    if (auto* profile = rex::system::kernel_state()->user_profile()) xuid = profile->xuid();
   }
   char name[64];
   std::snprintf(name, sizeof(name), "challenges_%016llX.bin", (unsigned long long)xuid);
-  return std::filesystem::path(root) / "reach" / "4D53085B" / name;
+  return reach::DataDir() / name;
 }
 
 // Saved progress: ids and the progress of each entry of both sets.

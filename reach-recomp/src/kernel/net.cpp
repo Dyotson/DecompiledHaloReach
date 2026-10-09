@@ -20,11 +20,22 @@
 //   system-link keys; registering, connecting and QoS listen
 //   succeed. VDP is sent unencrypted: only copies of this port talk to it.
 //
+// REACH_SERVER=host[:port] (default port 21100) connects to a Reach Live server
+// (server/reach_live_server.py) and implies REACH_NET=1. Everyone on the server, or
+// in the same REACH_ROOM on it, is on one virtual network: broadcasts go to all of
+// them through the server, and datagrams for one player go directly once UDP hole
+// punching opened a path (REACH_SERVER_RELAY=1 disables that), through the server
+// until then. The XNADDR of a Live player carries the id the server gave it
+// (0xF0000000 | id) instead of a host address. REACH_NET_PORT fixes the host UDP port,
+// for a port forward.
+//
 // Other socket types (TCP) still go to the SDK.
 //
 // REACH_NETTRACE=1 logs every networking import with its raw argument
 // registers r3-r8 and the result; busy calls are logged for their first 20
 // calls and then every 1000th.
+
+#include "identity.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -33,6 +44,7 @@
 
 #include <arpa/inet.h>
 #include <dlfcn.h>
+#include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
 #include <sys/socket.h>
@@ -76,7 +88,7 @@ bool PacketTrace() {
 }
 
 bool NetOn() {
-  static const bool enabled = EnvFlag("REACH_NET");
+  static const bool enabled = EnvFlag("REACH_NET") || reach::LiveMode();
   return enabled;
 }
 
@@ -159,7 +171,7 @@ void LogPacket(const char* dir, uint32_t vip, uint16_t source_port, uint16_t por
 }
 
 constexpr uint32_t kHandleBase = 0x52450000;  // our guest SOCKET handles: 'RE' + index
-constexpr uint32_t kMagic = 0x524E4554;       // 'RNET', first word of every datagram
+constexpr uint32_t kMagic = 0x524E4554;       // 'RNET', first word of every LAN datagram
 constexpr size_t kHeaderSize = 8;             // magic, guest source port, guest destination port
 constexpr uint16_t kHostPortFirst = 21000;
 constexpr uint16_t kHostPortCount = 8;
@@ -168,6 +180,31 @@ constexpr uint16_t kHostPortCount = 8;
 constexpr uint32_t kSelfVip = 0x004D0001;  // 0.77.0.1
 constexpr uint32_t kVipNet = 0x004D0000;   // 0.77.0.0/16
 constexpr uint32_t kBroadcast = 0xFFFFFFFF;
+
+// Reach Live server protocol (server/reach_live_server.py, docs/online_plan.md): every
+// packet starts with 'RLV1' and a type byte.
+constexpr uint32_t kLiveMagic = 0x524C5631;
+constexpr uint16_t kLiveVersion = 1;
+constexpr uint16_t kLiveDefaultPort = 21100;
+enum LiveType : uint8_t {
+  kHello = 1,    // client -> server: register / keep alive
+  kWelcome,      // server -> client: our id, the server epoch, our public address
+  kError,        // server -> client
+  kBroadcastMsg, // client -> server: a broadcast datagram for everyone in the room
+  kRelay,        // client -> server: a datagram for one player, through the server
+  kForward,      // server -> client: a broadcast or relayed datagram and who sent it
+  kPunch,        // player -> player: open a direct path through NATs
+  kPunchAck,     // player -> player
+  kData,         // player -> player: a datagram on the direct path
+  kBye,
+  kList,         // client -> server: who is in the room
+  kPeers,        // server -> client
+};
+// XNADDR.ina of a player on a Reach Live server: 0xF0000000 | the id the server gave
+// it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.
+constexpr uint32_t kLiveInaTag = 0xF0000000;
+
+using Clock = std::chrono::steady_clock;
 
 struct Datagram {
   uint32_t vip;
@@ -184,10 +221,45 @@ struct GuestSocket {
 };
 
 struct Endpoint {
-  uint32_t ip;  // host order
-  uint16_t port;
+  uint32_t ip = 0;  // host order
+  uint16_t port = 0;
   bool operator==(const Endpoint& o) const { return ip == o.ip && port == o.port; }
+  bool operator!=(const Endpoint& o) const { return !(*this == o); }
 };
+
+// Another player on the Reach Live server.
+struct LivePeer {
+  uint32_t vip = 0;
+  Endpoint public_ep, local_ep;  // as the server saw it / as it reported its LAN side
+  Endpoint direct;               // the path that answered a punch; ip 0: relay via the server
+  Clock::time_point punch_until{}, next_punch{}, punch_started{};
+};
+
+std::string IpString(uint32_t ip) {
+  return std::to_string(ip >> 24) + "." + std::to_string((ip >> 16) & 0xFF) + "." +
+         std::to_string((ip >> 8) & 0xFF) + "." + std::to_string(ip & 0xFF);
+}
+
+// Guest XNADDR: ina, inaOnline, wPortOnline, abEnet[6], abOnline[20].
+// LAN form: the host IP and UDP port of the instance.
+void WriteLanXnAddr(uint8_t* p, uint32_t ip, uint16_t port) {
+  std::memset(p, 0, 36);
+  Store32(p, ip);
+  Store16(p + 8, port);
+  const uint8_t mac[6] = {0x00, 0x22, 0x48, uint8_t(ip), uint8_t(port >> 8), uint8_t(port)};
+  std::memcpy(p + 10, mac, 6);
+}
+
+// Reach Live form: the server id (tagged), the public IP and the server epoch.
+void WriteLiveXnAddr(uint8_t* p, uint32_t id, uint16_t epoch, uint32_t public_ip) {
+  std::memset(p, 0, 36);
+  Store32(p, kLiveInaTag | id);
+  Store32(p + 4, public_ip);
+  Store16(p + 8, epoch);
+  const uint8_t mac[6] = {0x02, uint8_t(id >> 16), uint8_t(id >> 8), uint8_t(id),
+                          uint8_t(epoch >> 8), uint8_t(epoch)};
+  std::memcpy(p + 10, mac, 6);
+}
 
 class VNet {
  public:
@@ -197,8 +269,6 @@ class VNet {
   }
 
   bool Ready() const { return fd_ >= 0; }
-  uint32_t SelfIp() const { return self_ip_; }
-  uint16_t HostPort() const { return host_port_; }
 
   uint32_t CreateSocket() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -273,27 +343,62 @@ class VNet {
       if (!it->second.port) it->second.port = next_ephemeral_++;
       source_port = it->second.port;
     }
-    std::vector<uint8_t> packet(kHeaderSize + size);
-    Store32(packet.data(), kMagic);
-    Store16(packet.data() + 4, source_port);
-    Store16(packet.data() + 6, port);
-    std::memcpy(packet.data() + kHeaderSize, data, size);
-
     LogPacket("send", vip, source_port, port, data, size);
     if (vip == kSelfVip) {
       Deliver(kSelfVip, source_port, port, data, size);
       return 0;
     }
     if (vip == kBroadcast || (vip & 0xFF) == 0xFF) {
-      for (uint16_t p = kHostPortFirst; p < kHostPortFirst + kHostPortCount; ++p) {
-        if (p != host_port_) SendHost({INADDR_LOOPBACK, p}, packet);
-        if (lan_) SendHost({INADDR_BROADCAST, p}, packet);
+      if (!live_ || lan_) {
+        std::vector<uint8_t> packet = LanPacket(source_port, port, data, size);
+        for (uint16_t p = kHostPortFirst; p < kHostPortFirst + kHostPortCount; ++p) {
+          if (p != host_port_) SendHost({INADDR_LOOPBACK, p}, packet);
+          if (lan_) SendHost({INADDR_BROADCAST, p}, packet);
+        }
+      }
+      if (live_ && live_id_) {
+        std::vector<uint8_t> body(4 + size);
+        Store16(body.data(), source_port);
+        Store16(body.data() + 2, port);
+        std::memcpy(body.data() + 4, data, size);
+        SendLive(server_, kBroadcastMsg, body);
       }
       return 0;
     }
+    if (live_) {
+      uint32_t id = 0;
+      Endpoint direct;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        auto it = live_id_by_vip_.find(vip);
+        if (it != live_id_by_vip_.end()) {
+          id = it->second;
+          direct = live_peers_[id].direct;
+          if (!direct.ip) StartPunchLocked(id);
+        }
+      }
+      if (id) {
+        if (direct.ip && !relay_only_) {
+          std::vector<uint8_t> body(8 + size);
+          Store32(body.data(), live_id_);
+          Store16(body.data() + 4, source_port);
+          Store16(body.data() + 6, port);
+          std::memcpy(body.data() + 8, data, size);
+          SendLive(direct, kData, body);
+        } else {
+          std::vector<uint8_t> body(8 + size);
+          Store32(body.data(), id);
+          Store16(body.data() + 4, source_port);
+          Store16(body.data() + 6, port);
+          std::memcpy(body.data() + 8, data, size);
+          SendLive(server_, kRelay, body);
+        }
+        return 0;
+      }
+    }
     Endpoint endpoint;
-    if (!EndpointOf(vip, endpoint)) return kWsaENetUnreach;
-    SendHost(endpoint, packet);
+    if (!LanEndpointOf(vip, endpoint)) return kWsaENetUnreach;
+    SendHost(endpoint, LanPacket(source_port, port, data, size));
     return 0;
   }
 
@@ -318,7 +423,7 @@ class VNet {
   // (negative: forever). Returns the handles that are readable.
   std::vector<uint32_t> WaitReadable(const std::vector<uint32_t>& handles, int64_t timeout_us) {
     std::unique_lock<std::mutex> lock(mutex_);
-    auto deadline = std::chrono::steady_clock::now() + std::chrono::microseconds(timeout_us);
+    auto deadline = Clock::now() + std::chrono::microseconds(timeout_us);
     for (;;) {
       std::vector<uint32_t> ready;
       for (uint32_t h : handles) {
@@ -334,68 +439,109 @@ class VNet {
     }
   }
 
-  // Virtual IP of a host endpoint (an XNADDR's ina and wPortOnline).
-  uint32_t VipOf(Endpoint endpoint) {
-    if (endpoint.ip == self_ip_ && endpoint.port == host_port_) return kSelfVip;
+  // This instance's XNADDR: the Reach Live form once the server has welcomed us,
+  // else the LAN form.
+  void WriteSelfXnAddr(uint8_t* xna) {
     std::lock_guard<std::mutex> lock(mutex_);
-    uint64_t key = uint64_t(endpoint.ip) << 16 | endpoint.port;
-    auto it = vip_by_endpoint_.find(key);
-    if (it != vip_by_endpoint_.end()) return it->second;
-    uint32_t vip = kVipNet + next_vip_++;
-    vip_by_endpoint_[key] = vip;
-    endpoint_by_vip_[vip] = endpoint;
-    REXLOG_INFO("REACH_NET: peer {}.{}.{}.{}:{} is 0.77.{}.{}", endpoint.ip >> 24,
-                (endpoint.ip >> 16) & 0xFF, (endpoint.ip >> 8) & 0xFF, endpoint.ip & 0xFF,
-                endpoint.port, (vip >> 8) & 0xFF, vip & 0xFF);
-    return vip;
+    if (live_id_) {
+      WriteLiveXnAddr(xna, live_id_, live_epoch_, public_ep_.ip);
+    } else {
+      WriteLanXnAddr(xna, self_ip_, host_port_);
+    }
   }
 
-  bool EndpointOf(uint32_t vip, Endpoint& out) {
+  // Virtual IP of a peer's XNADDR.
+  uint32_t VipOfXnAddr(const uint8_t* xna) {
+    const uint32_t ina = Load32(xna);
+    if ((ina & 0xFF000000) == kLiveInaTag) {
+      const uint32_t id = ina & 0x00FFFFFF;
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (id == live_id_) return kSelfVip;
+      return LivePeerLocked(id).vip;
+    }
+    return LanVipOf({ina, Load16(xna + 8)});
+  }
+
+  // The XNADDR behind a virtual IP; false when the IP is unknown.
+  bool XnAddrOfVip(uint32_t vip, uint8_t* xna) {
     if (vip == kSelfVip) {
-      out = {self_ip_, host_port_};
+      WriteSelfXnAddr(xna);
       return true;
     }
     std::lock_guard<std::mutex> lock(mutex_);
-    auto it = endpoint_by_vip_.find(vip);
-    if (it == endpoint_by_vip_.end()) return false;
-    out = it->second;
-    return true;
+    if (auto it = live_id_by_vip_.find(vip); it != live_id_by_vip_.end()) {
+      WriteLiveXnAddr(xna, it->second, live_epoch_, live_peers_[it->second].public_ep.ip);
+      return true;
+    }
+    if (auto it = endpoint_by_vip_.find(vip); it != endpoint_by_vip_.end()) {
+      WriteLanXnAddr(xna, it->second.ip, it->second.port);
+      return true;
+    }
+    return false;
   }
 
  private:
   VNet() {
     lan_ = EnvFlag("REACH_NET_LAN");
+    live_ = reach::LiveMode();
+    relay_only_ = EnvFlag("REACH_SERVER_RELAY");
+    if (const char* room = std::getenv("REACH_ROOM")) room_ = std::string(room).substr(0, 32);
     self_ip_ = INADDR_LOOPBACK;
     if (const char* ip = std::getenv("REACH_NET_IP"); ip && *ip) {
       in_addr a{};
       if (inet_pton(AF_INET, ip, &a) == 1) self_ip_ = ntohl(a.s_addr);
-    } else if (lan_) {
+    } else if (lan_ || live_) {
       self_ip_ = LanAddress();
     }
     fd_ = socket(AF_INET, SOCK_DGRAM, 0);
     int one = 1;
     setsockopt(fd_, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
-    for (uint16_t p = kHostPortFirst; p < kHostPortFirst + kHostPortCount; ++p) {
-      sockaddr_in a{};
-      a.sin_family = AF_INET;
-      a.sin_port = htons(p);
-      a.sin_addr.s_addr = htonl(lan_ ? INADDR_ANY : INADDR_LOOPBACK);
-      if (bind(fd_, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0) {
+    const bool any = lan_ || live_;  // reachable from other machines
+    uint16_t first = kHostPortFirst, count = kHostPortCount;
+    if (const char* port = std::getenv("REACH_NET_PORT"); port && *port) {
+      first = uint16_t(std::atoi(port));
+      count = 1;
+    }
+    for (uint16_t p = first; p < first + count; ++p) {
+      if (BindHost(any, p)) {
         host_port_ = p;
         break;
       }
     }
+    if (!host_port_ && live_ && BindHost(any, 0)) {
+      sockaddr_in a{};
+      socklen_t len = sizeof(a);
+      getsockname(fd_, reinterpret_cast<sockaddr*>(&a), &len);
+      host_port_ = ntohs(a.sin_port);
+    }
     if (!host_port_) {
-      REXLOG_ERROR("REACH_NET: no free host UDP port in {}-{}", kHostPortFirst,
-                   kHostPortFirst + kHostPortCount - 1);
+      REXLOG_ERROR("REACH_NET: no free host UDP port in {}-{}", first, first + count - 1);
       close(fd_);
       fd_ = -1;
       return;
     }
-    REXLOG_INFO("REACH_NET: virtual network on {}.{}.{}.{} UDP {}{}", self_ip_ >> 24,
-                (self_ip_ >> 16) & 0xFF, (self_ip_ >> 8) & 0xFF, self_ip_ & 0xFF, host_port_,
+    REXLOG_INFO("REACH_NET: virtual network on {} UDP {}{}", IpString(self_ip_), host_port_,
                 lan_ ? " (LAN broadcast on)" : "");
     std::thread([this] { ReceiveLoop(); }).detach();
+    if (live_) {
+      std::random_device rd;
+      live_token_ = uint64_t(rd()) << 32 | rd();
+      std::thread([this] { LiveLoop(); }).detach();
+      // Give the server a moment, so the game sees its Live address from the start.
+      std::unique_lock<std::mutex> lock(mutex_);
+      cv_.wait_for(lock, std::chrono::seconds(3), [this] { return live_id_ != 0; });
+      if (!live_id_) {
+        REXLOG_WARN("REACH_LIVE: no answer from {} yet; still trying", ServerName());
+      }
+    }
+  }
+
+  bool BindHost(bool any, uint16_t port) {
+    sockaddr_in a{};
+    a.sin_family = AF_INET;
+    a.sin_port = htons(port);
+    a.sin_addr.s_addr = htonl(any ? INADDR_ANY : INADDR_LOOPBACK);
+    return bind(fd_, reinterpret_cast<sockaddr*>(&a), sizeof(a)) == 0;
   }
 
   static uint32_t LanAddress() {
@@ -415,6 +561,260 @@ class VNet {
     }
     close(s);
     return ip;
+  }
+
+  static std::vector<uint8_t> LanPacket(uint16_t source_port, uint16_t port, const uint8_t* data,
+                                        size_t size) {
+    std::vector<uint8_t> packet(kHeaderSize + size);
+    Store32(packet.data(), kMagic);
+    Store16(packet.data() + 4, source_port);
+    Store16(packet.data() + 6, port);
+    std::memcpy(packet.data() + kHeaderSize, data, size);
+    return packet;
+  }
+
+  // Virtual IP of a LAN instance's host endpoint (its XNADDR's ina and wPortOnline).
+  uint32_t LanVipOf(Endpoint endpoint) {
+    if (endpoint.ip == self_ip_ && endpoint.port == host_port_) return kSelfVip;
+    std::lock_guard<std::mutex> lock(mutex_);
+    uint64_t key = uint64_t(endpoint.ip) << 16 | endpoint.port;
+    auto it = vip_by_endpoint_.find(key);
+    if (it != vip_by_endpoint_.end()) return it->second;
+    uint32_t vip = kVipNet + next_vip_++;
+    vip_by_endpoint_[key] = vip;
+    endpoint_by_vip_[vip] = endpoint;
+    REXLOG_INFO("REACH_NET: peer {}:{} is 0.77.{}.{}", IpString(endpoint.ip), endpoint.port,
+                (vip >> 8) & 0xFF, vip & 0xFF);
+    return vip;
+  }
+
+  bool LanEndpointOf(uint32_t vip, Endpoint& out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    auto it = endpoint_by_vip_.find(vip);
+    if (it == endpoint_by_vip_.end()) return false;
+    out = it->second;
+    return true;
+  }
+
+  // The Reach Live player with server id `id`, created on first sight. Needs mutex_.
+  LivePeer& LivePeerLocked(uint32_t id) {
+    LivePeer& peer = live_peers_[id];
+    if (!peer.vip) {
+      peer.vip = kVipNet + next_vip_++;
+      live_id_by_vip_[peer.vip] = id;
+      REXLOG_INFO("REACH_LIVE: player #{} is 0.77.{}.{}", id, (peer.vip >> 8) & 0xFF,
+                  peer.vip & 0xFF);
+    }
+    return peer;
+  }
+
+  // Starts hole punching toward `id` unless a direct path exists or a recent attempt
+  // failed. Needs mutex_.
+  void StartPunchLocked(uint32_t id) {
+    if (relay_only_) return;
+    LivePeer& peer = LivePeerLocked(id);
+    const auto now = Clock::now();
+    if (peer.direct.ip || !peer.public_ep.ip) return;
+    if (peer.punch_started != Clock::time_point{} && now - peer.punch_started < std::chrono::seconds(30)) {
+      return;
+    }
+    peer.punch_started = now;
+    peer.punch_until = now + std::chrono::seconds(6);
+    peer.next_punch = now;
+  }
+
+  std::string ServerName() const { return server_host_ + ":" + std::to_string(server_port_); }
+
+  bool ResolveServer() {
+    std::string spec = std::getenv("REACH_SERVER");
+    server_port_ = kLiveDefaultPort;
+    if (auto colon = spec.rfind(':'); colon != std::string::npos) {
+      server_port_ = uint16_t(std::atoi(spec.c_str() + colon + 1));
+      spec.resize(colon);
+    }
+    server_host_ = spec;
+    addrinfo hints{};
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_DGRAM;
+    addrinfo* result = nullptr;
+    if (getaddrinfo(spec.c_str(), nullptr, &hints, &result) != 0 || !result) {
+      REXLOG_WARN("REACH_LIVE: cannot resolve server {}", spec);
+      return false;
+    }
+    uint32_t ip = ntohl(reinterpret_cast<sockaddr_in*>(result->ai_addr)->sin_addr.s_addr);
+    freeaddrinfo(result);
+    std::lock_guard<std::mutex> lock(mutex_);
+    server_ = {ip, server_port_};
+    return true;
+  }
+
+  void SendLive(Endpoint to, LiveType type, const std::vector<uint8_t>& body) {
+    std::vector<uint8_t> packet(5 + body.size());
+    Store32(packet.data(), kLiveMagic);
+    packet[4] = type;
+    std::memcpy(packet.data() + 5, body.data(), body.size());
+    SendHost(to, packet);
+  }
+
+  void SendHello() {
+    const std::string& name = reach::IdentityGamertag();
+    std::vector<uint8_t> body(24);
+    Store16(body.data(), kLiveVersion);
+    Store32(body.data() + 2, uint32_t(live_token_ >> 32));
+    Store32(body.data() + 6, uint32_t(live_token_));
+    const uint64_t xuid = reach::IdentityXuid();
+    Store32(body.data() + 10, uint32_t(xuid >> 32));
+    Store32(body.data() + 14, uint32_t(xuid));
+    Store32(body.data() + 18, self_ip_);
+    Store16(body.data() + 22, host_port_);
+    body.push_back(uint8_t(room_.size()));
+    body.insert(body.end(), room_.begin(), room_.end());
+    body.push_back(uint8_t(name.size()));
+    body.insert(body.end(), name.begin(), name.end());
+    SendLive(server_, kHello, body);
+  }
+
+  // Registration, keep-alive and hole punching.
+  void LiveLoop() {
+    Clock::time_point next_hello{}, next_resolve{};
+    bool resolved = false;
+    for (;;) {
+      const auto now = Clock::now();
+      if (!resolved && now >= next_resolve) {
+        resolved = ResolveServer();
+        next_resolve = now + std::chrono::seconds(10);
+      }
+      if (resolved && now >= next_hello) {
+        SendHello();
+        std::lock_guard<std::mutex> lock(mutex_);
+        next_hello = now + std::chrono::seconds(live_id_ ? 5 : 1);
+        if (live_id_ && now - last_welcome_ > std::chrono::seconds(20)) {
+          REXLOG_WARN("REACH_LIVE: lost the server {}; reconnecting", ServerName());
+          last_welcome_ = now;
+        }
+      }
+      std::vector<std::pair<Endpoint, std::vector<uint8_t>>> punches;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        for (auto& [id, peer] : live_peers_) {
+          if (peer.direct.ip || now >= peer.punch_until || now < peer.next_punch) continue;
+          peer.next_punch = now + std::chrono::milliseconds(300);
+          std::vector<uint8_t> body(10);
+          Store32(body.data(), live_id_);
+          Store32(body.data() + 4, id);
+          Store16(body.data() + 8, live_epoch_);
+          punches.push_back({peer.public_ep, body});
+          if (peer.local_ep.ip && peer.local_ep != peer.public_ep) {
+            punches.push_back({peer.local_ep, body});
+          }
+        }
+      }
+      for (auto& [to, body] : punches) SendLive(to, kPunch, body);
+      std::this_thread::sleep_for(std::chrono::milliseconds(100));
+    }
+  }
+
+  void OnLive(Endpoint from, uint8_t type, const uint8_t* p, size_t n) {
+    bool from_server;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      from_server = from == server_;
+    }
+    switch (type) {
+      case kWelcome: {
+        if (!from_server || n < 14) return;
+        const uint32_t id = Load32(p), public_ip = Load32(p + 6);
+        const uint16_t epoch = Load16(p + 4), public_port = Load16(p + 10);
+        const size_t motd_size = std::min<size_t>(Load16(p + 12), n - 14);
+        bool changed;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          changed = id != live_id_ || epoch != live_epoch_;
+          live_id_ = id;
+          live_epoch_ = epoch;
+          public_ep_ = {public_ip, public_port};
+          last_welcome_ = Clock::now();
+          cv_.notify_all();
+        }
+        if (changed) {
+          REXLOG_INFO("REACH_LIVE: signed in to {} as {} (player #{}), public address {}:{}{}{}",
+                      ServerName(), reach::IdentityGamertag(), id, IpString(public_ip),
+                      public_port, motd_size ? ": " : "",
+                      std::string(reinterpret_cast<const char*>(p + 14), motd_size));
+        }
+        return;
+      }
+      case kError: {
+        if (!from_server || n < 3) return;
+        const size_t size = std::min<size_t>(Load16(p + 1), n - 3);
+        static std::atomic<int> logged{0};
+        if (logged.fetch_add(1) < 20) {
+          REXLOG_WARN("REACH_LIVE: server error {}: {}", p[0],
+                      std::string(reinterpret_cast<const char*>(p + 3), size));
+        }
+        if (p[0] == 1) SendHello();  // "not registered": the server restarted
+        return;
+      }
+      case kForward: {
+        if (!from_server || n < 20) return;
+        const uint32_t id = Load32(p);
+        uint32_t vip;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          LivePeer& peer = LivePeerLocked(id);
+          peer.public_ep = {Load32(p + 4), Load16(p + 8)};
+          peer.local_ep = {Load32(p + 10), Load16(p + 14)};
+          vip = peer.vip;
+          if (!peer.direct.ip) StartPunchLocked(id);
+        }
+        Deliver(vip, Load16(p + 16), Load16(p + 18), p + 20, n - 20);
+        return;
+      }
+      case kPunch:
+      case kPunchAck: {
+        if (n < 10) return;
+        const uint32_t id = Load32(p);
+        std::vector<uint8_t> ack;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          if (relay_only_ || Load32(p + 4) != live_id_ || Load16(p + 8) != live_epoch_) return;
+          LivePeer& peer = LivePeerLocked(id);
+          if (!peer.direct.ip) {  // the first path that works; punches may arrive on several
+            REXLOG_INFO("REACH_LIVE: direct path to player #{} via {}:{}", id, IpString(from.ip),
+                        from.port);
+            peer.direct = from;
+          }
+          if (type == kPunch) {
+            ack.resize(10);
+            Store32(ack.data(), live_id_);
+            Store32(ack.data() + 4, id);
+            Store16(ack.data() + 8, live_epoch_);
+          }
+        }
+        if (!ack.empty()) SendLive(from, kPunchAck, ack);
+        return;
+      }
+      case kData: {
+        if (n < 8) return;
+        uint32_t vip;
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          auto it = live_peers_.find(Load32(p));
+          if (it == live_peers_.end()) return;
+          LivePeer& peer = it->second;
+          if (from != peer.direct && from != peer.public_ep && from != peer.local_ep) return;
+          if (!peer.direct.ip) peer.direct = from;
+          vip = peer.vip;
+        }
+        Deliver(vip, Load16(p + 4), Load16(p + 6), p + 8, n - 8);
+        return;
+      }
+      case kPeers:
+        if (from_server && n >= 2) REXLOG_INFO("REACH_LIVE: {} players in the room", Load16(p));
+        return;
+      default:
+        return;
+    }
   }
 
   void SendHost(Endpoint endpoint, const std::vector<uint8_t>& packet) {
@@ -445,12 +845,18 @@ class VNet {
       socklen_t from_len = sizeof(from);
       ssize_t n = recvfrom(fd_, buffer.data(), buffer.size(), 0,
                            reinterpret_cast<sockaddr*>(&from), &from_len);
-      if (n < ssize_t(kHeaderSize) || Load32(buffer.data()) != kMagic) continue;
+      if (n < 5) continue;
       Endpoint endpoint{ntohl(from.sin_addr.s_addr), ntohs(from.sin_port)};
+      const uint32_t magic = Load32(buffer.data());
+      if (magic == kLiveMagic) {
+        OnLive(endpoint, buffer[4], buffer.data() + 5, size_t(n) - 5);
+        continue;
+      }
+      if (n < ssize_t(kHeaderSize) || magic != kMagic) continue;
       if (endpoint.port == host_port_ && (endpoint.ip == self_ip_ || endpoint.ip == INADDR_LOOPBACK)) {
         continue;  // our own broadcast
       }
-      uint32_t vip = VipOf(endpoint);
+      uint32_t vip = LanVipOf(endpoint);
       Deliver(vip, Load16(buffer.data() + 4), Load16(buffer.data() + 6),
               buffer.data() + kHeaderSize, size_t(n) - kHeaderSize);
     }
@@ -468,6 +874,21 @@ class VNet {
   std::unordered_map<uint64_t, uint32_t> vip_by_endpoint_;
   std::unordered_map<uint32_t, Endpoint> endpoint_by_vip_;
   uint32_t next_vip_ = 2;
+
+  // Reach Live (REACH_SERVER).
+  bool live_ = false;
+  bool relay_only_ = false;  // REACH_SERVER_RELAY=1: never punch, for testing the relay
+  std::string room_;
+  std::string server_host_;
+  uint16_t server_port_ = kLiveDefaultPort;
+  Endpoint server_;
+  uint64_t live_token_ = 0;  // tells the server a restarted game from a stale registration
+  uint32_t live_id_ = 0;     // our id on the server, 0 until it welcomes us
+  uint16_t live_epoch_ = 0;
+  Endpoint public_ep_;
+  Clock::time_point last_welcome_{};
+  std::unordered_map<uint32_t, LivePeer> live_peers_;
+  std::unordered_map<uint32_t, uint32_t> live_id_by_vip_;
 };
 
 bool Ours(uint32_t handle) {
@@ -475,15 +896,6 @@ bool Ours(uint32_t handle) {
 }
 
 void SetError(uint32_t error) { rex::system::XThread::SetLastError(error); }
-
-// Guest XNADDR: ina, inaOnline, wPortOnline, abEnet[6], abOnline[20].
-void WriteXnAddr(uint8_t* p, uint32_t ip, uint16_t port) {
-  std::memset(p, 0, 36);
-  Store32(p, ip);
-  Store16(p + 8, port);
-  const uint8_t mac[6] = {0x00, 0x22, 0x48, uint8_t(ip), uint8_t(port >> 8), uint8_t(port)};
-  std::memcpy(p + 10, mac, 6);
-}
 
 }  // namespace
 
@@ -529,23 +941,21 @@ REACH_NET_FUNC(NetDll_XNetGetEthernetLinkStatus, NetOn(), {
 
 // DWORD XNetGetTitleXnAddr(XNADDR* pxna)
 REACH_NET_FUNC(NetDll_XNetGetTitleXnAddr, NetOn() && VNet::Get().Ready(), {
-  if (ctx.r4.u32) WriteXnAddr(base + ctx.r4.u32, VNet::Get().SelfIp(), VNet::Get().HostPort());
+  if (ctx.r4.u32) VNet::Get().WriteSelfXnAddr(base + ctx.r4.u32);
   ctx.r3.u64 = 0x06;  // XNET_GET_XNADDR_STATIC | XNET_GET_XNADDR_ETHERNET
 })
 
 // INT XNetXnAddrToInAddr(const XNADDR* pxna, const XNKID* pxnkid, IN_ADDR* pina)
 REACH_NET_FUNC(NetDll_XNetXnAddrToInAddr, NetOn() && VNet::Get().Ready(), {
-  const uint8_t* xna = base + ctx.r4.u32;
-  uint32_t vip = VNet::Get().VipOf({Load32(xna), Load16(xna + 8)});
-  Store32(base + ctx.r6.u32, vip);
+  Store32(base + ctx.r6.u32, VNet::Get().VipOfXnAddr(base + ctx.r4.u32));
   ctx.r3.u64 = 0;
 })
 
 // INT XNetInAddrToXnAddr(IN_ADDR ina, XNADDR* pxna, XNKID* pxnkid)
 REACH_NET_FUNC(NetDll_XNetInAddrToXnAddr, NetOn() && VNet::Get().Ready(), {
-  Endpoint endpoint;
-  if (VNet::Get().EndpointOf(ctx.r4.u32, endpoint)) {
-    if (ctx.r5.u32) WriteXnAddr(base + ctx.r5.u32, endpoint.ip, endpoint.port);
+  uint8_t xna[36];
+  if (VNet::Get().XnAddrOfVip(ctx.r4.u32, xna)) {
+    if (ctx.r5.u32) std::memcpy(base + ctx.r5.u32, xna, sizeof(xna));
     ctx.r3.u64 = 0;
   } else {
     ctx.r3.u64 = kWsaEInval;

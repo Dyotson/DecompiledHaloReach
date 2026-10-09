@@ -196,6 +196,13 @@ Check exact param names in `endpoints.json` before calling.
     START menu, saved per profile (`docs/progression_re.md` 4.1). Progress counting in play
     is not verified yet.
 
+- 2026-10-09 (late night): **internet play through Reach Live.** `server/reach_live_server.py`
+  (self-hostable, standard-library Python) plus a Live mode in `src/kernel/net.cpp`
+  (`REACH_SERVER=host`): players on a server see each other's System Link games, join and play
+  Firefight, directly via UDP hole punching or relayed by the server (about 4 KB/s for a
+  two-player match). Each player gets a persistent online identity
+  (`src/kernel/identity.cpp`). `docs/online_plan.md` section 5.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
@@ -223,6 +230,11 @@ Check exact param names in `endpoints.json` before calling.
   with the virtual network (`REACH_NET=1`; the second gets its own profile, XUID and
   gamertag via `REACH_INSTANCE=2`), makes A host a Firefight lobby and selects A's party on
   B. `echo X:0.3 > DIR_B/in.fifo` presses "Join". `REACH_NETTRACE=packets` logs datagrams.
+- Through a Reach Live server: start `server/reach_live_server.py --host 127.0.0.1 --http-port
+  21101`, then `REACH_SERVER=127.0.0.1 tools/system_link_pair.sh DIR_A DIR_B` (profiles in
+  `DIR_A/data`, `DIR_B/data`; keep them on disk, not in RAM-backed `/tmp`).
+  `REACH_SERVER_RELAY=1` forces the relay path. `curl localhost:21101` shows players and
+  relayed bytes.
 - `qrenderdoc --python` crashes with "Illegal instruction" under `QT_QPA_PLATFORM=offscreen`;
   run it without that variable.
 - Each instance takes about 6 GB of RAM and 5 GB of `/dev/shm`. `REACH_NETTRACE=1` logs every

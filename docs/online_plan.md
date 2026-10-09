@@ -1,12 +1,13 @@
 # P2P online: findings and plan
 
-Status (2026-10-09, night): M0, M1 and M2 done, M3 started: two instances on one machine join
-the same System Link lobby and play a Firefight match together (Overlook, both players on the
-scoreboard, deaths seen by both, stable for minutes). Not yet tried: a full match to the
-postgame, host leaving / migration, Custom Games, more than two players, other machines. `reach-recomp/src/kernel/net.cpp`
-implements the virtual network described in section 4 behind `REACH_NET=1`. Two instances
-on one machine see each other, and one joins the other's lobby (both show "2/16" with both
-gamertags). `tools/system_link_pair.sh` sets this up.
+Status (2026-10-09, night): M0-M3 done for Firefight, M4 (internet) working. Two instances
+join the same System Link lobby and play a Firefight match together, on one machine
+(`REACH_NET=1`, the virtual network in section 4) and through a **Reach Live server**
+(section 5, `REACH_SERVER=host`): the server lists every connected player's System Link
+games in the game's own browser and connects players directly through UDP hole punching,
+or relays their traffic when that fails. Not yet tried: a full match to the postgame, host
+leaving / migration, Custom Games, more than two players, separate machines across real NATs.
+`tools/system_link_pair.sh` sets up a pair (with `REACH_SERVER` set, through a server).
 "Guess" marks statements not confirmed by code or a run.
 
 ## Progress log
@@ -248,10 +249,10 @@ Milestones:
   each.
 - **M3 – a game starts and plays.** Join, membership updates, map load, gameplay, ending, host
   leaving / host migration. Measure bandwidth and latency through the layer.
-- **M4 – internet.** A small rendezvous service: rooms with a code, each instance registers the
+- **M4 – internet.** Done as Reach Live (section 5): rooms, each instance registers the
   public endpoint the server observes, UDP hole punching through it, and a relay fallback for
-  symmetric NAT. Sketch it in Python/Go, self-hostable; no Microsoft services. Optionally add
-  UPnP, as in the fork.
+  symmetric NAT; self-hostable Python, no Microsoft services. Optionally add UPnP, as in the
+  fork.
 - **M5 – polish.**
   - Room and peer UI.
   - Voice: `XamVoice*` are SDK stubs today, so VDP voice payloads would need a host voice path.
@@ -282,3 +283,59 @@ Risks:
 Possibly useful later: the Ghidra project also has `haloreach.dll` open (MCC's PC build, with
 its own network layer). It may help name Blam network functions; it is not needed for the
 plan above.
+
+## 5. Reach Live (custom servers)
+
+Players connect to a community-run server instead of Xbox Live:
+
+```sh
+python3 server/reach_live_server.py --port 21100 --http-port 21101   # on the server
+REACH_SERVER=example.org tools/run_reach.sh 3600                         # each player
+```
+
+- **Server** (`server/reach_live_server.py`, Python standard library only, one UDP port):
+  registers players, forwards System Link broadcasts to everyone in the same room, relays
+  datagrams between players that can't reach each other, and tells each player its public
+  address. `--http-port` serves a JSON status page (players, rooms, relay totals).
+  `server/test_reach_live_server.py` tests the protocol.
+- **Client** (`src/kernel/net.cpp`): `REACH_SERVER=host[:port]` turns on the virtual network
+  in Live mode. Options: `REACH_ROOM=name` (only players in the same room see each other),
+  `REACH_NET_PORT=n` (fixed local UDP port, for a manual port forward),
+  `REACH_SERVER_RELAY=1` (never connect directly; for testing), `REACH_NET_LAN=1` (also
+  broadcast on the LAN).
+- **Identity** (`src/kernel/identity.cpp`): the first Live run writes
+  `~/.local/share/reach/4D53085B/live_identity.txt` with an online-style XUID
+  (`0009xxxxxxxxxxxx`) and a gamertag (the login name; edit the file to change it).
+  `REACH_GAMERTAG` / `REACH_XUID` override it. The game shows these in lobbies.
+- **Addresses.** A Live player's XNADDR carries the id the server gave it (`ina` =
+  `0xF0000000 | id`, `inaOnline` = public IP, `wPortOnline` = server epoch). Peers map it to a
+  virtual IP 0.77.x.y as for LAN peers; the network layer routes that IP to the player's
+  direct path or through the server.
+- **NAT traversal.** When a player first hears from another (any forwarded datagram), both
+  send `punch` packets to the other's public and LAN addresses every 300 ms for 6 s; the
+  first that arrives opens the direct path (and is answered). Without one, traffic keeps
+  going through the server; a new attempt can start after 30 s.
+
+Protocol (UDP, big-endian; every packet starts with `RLV1` and a type byte):
+
+| Type | Direction | Body |
+| --- | --- | --- |
+| 1 hello | client → server, every 5 s | version u16, process token u64, XUID u64, LAN IP u32, LAN port u16, room (u8 length + bytes), gamertag (u8 length + UTF-8) |
+| 2 welcome | server → client | player id u32, server epoch u16, public IP u32, public port u16, message (u16 length + bytes) |
+| 3 error | server → client | code u8 (1 not registered, 2 version, 3 full), text (u16 length + bytes) |
+| 4 broadcast | client → server | guest source port u16, guest destination port u16, payload |
+| 5 relay | client → server | destination player id u32, guest ports, payload |
+| 6 forward | server → client | source player id u32, its public IP u32 + port u16, its LAN IP u32 + port u16, guest ports, payload |
+| 7 punch / 8 punch-ack | player ↔ player | sender id u32, receiver id u32, server epoch u16 |
+| 9 data | player ↔ player | sender id u32, guest ports, payload |
+| 10 bye, 11 list / 12 peers | | leaving; who is in the room |
+
+Measured on one machine (relay forced with `REACH_SERVER_RELAY=1`): a Firefight match between
+two players is about 4 KB/s and 60 packets/s through the server in total, so a small VPS can
+relay many games. The lobby, the join and the match work both directly and relayed.
+
+Not done yet (next steps for "Live"): the game still thinks it is offline (signed in locally,
+System Link menus), so Live-only features (matchmaking playlists, Xbox Live parties and
+invites, file share, Bungie's challenges) are not available. Making the profile "signed in
+to Xbox Live" and answering the XSession / friends / presence / title storage requests from
+the server is the next layer.

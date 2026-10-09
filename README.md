@@ -51,7 +51,7 @@ the game (see [Legal](#legal)).
 | Campaign (Winter Contingency) | Loads, plays the opening and reaches gameplay; rendering matches Xenia after 19 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); real occlusion queries, so the game no longer issues the water draw that hangs the GPU |
 | Progression (cR/rank/Armory) | Works offline: cR earned in play, rank-ups, Armory purchases saved in the profile, Spartan preview in the Armory and post-game screens, daily and weekly challenges picked locally each day ([`docs/progression_re.md`](docs/progression_re.md)) |
 | Forge | Works locally: editing on Sword Base, object placement, saving map variants |
-| Online P2P | System Link works between two instances on one machine: join a lobby and play Firefight together (virtual network, `REACH_NET=1`, [`docs/online_plan.md`](docs/online_plan.md)); other machines and the internet are next |
+| Online P2P | System Link games work over the internet through a self-hosted **Reach Live** server: players see each other's games in the System Link browser, join and play Firefight; direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Tested with two instances on one machine. Xbox Live features (matchmaking, parties, file share) are next |
 | File share | Not started |
 
 See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debugging recipes.
@@ -91,6 +91,25 @@ tools/run_reach.sh 60
 
 Game saves and the emulated cache partitions are stored under `~/.local/share/reach/`.
 
+## Playing online (Reach Live)
+
+Anyone can run a server; it needs Python 3 and one open UDP port:
+
+```sh
+python3 server/reach_live_server.py --port 21100 --http-port 21101
+```
+
+Players start the game pointed at it, then use System Link from the lobby (Y, "Select
+Network"):
+
+```sh
+REACH_SERVER=your.server.org tools/run_reach.sh 3600
+```
+
+Your gamertag is in `~/.local/share/reach/4D53085B/live_identity.txt` (created on the first
+online run). `REACH_ROOM=name` keeps a group of players to themselves. Details and the
+protocol: [`docs/online_plan.md`](docs/online_plan.md) section 5.
+
 ## Repository layout
 
 | Path | What |
@@ -100,6 +119,7 @@ Game saves and the emulated cache partitions are stored under `~/.local/share/re
 | `reach-recomp/src/` | Our runtime code: app setup, kernel overrides, cross-DLL thunks |
 | `reach-recomp/generated/` | Codegen output. **Not committed** here (translated game code), except the SDK's `rexglue.cmake`. The maintainer keeps a private copy, synced with `tools/sync_generated_repo.sh` |
 | `patches/rexglue-sdk/` | Fixes we carry on top of the ReXGlue SDK (built by `tools/build_rexglue_sdk.sh`) |
+| `server/` | Reach Live, the self-hostable online server |
 | `tools/` | Extraction, analysis, run and debug tooling (`tools/renderdoc/`: GPU capture analysis) |
 | `docs/` | Project log, debugging recipes, reverse-engineering notes |
 | `docs/symbols/` | Function names recovered in Ghidra (`address,name` CSV) |

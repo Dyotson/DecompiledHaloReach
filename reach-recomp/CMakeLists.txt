@@ -19,6 +19,7 @@ set(REACH_SOURCES
     src/hooks/offline_challenges.cpp
     src/hooks/switch_tailcalls.cpp
     src/kernel/file_delete_on_close.cpp
+    src/kernel/identity.cpp
     src/kernel/input_autopress.cpp
     src/kernel/net.cpp
     src/kernel/xam_enumerate.cpp

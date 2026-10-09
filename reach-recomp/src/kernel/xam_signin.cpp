@@ -6,9 +6,11 @@
 // report no user, matching that setup for differential debugging. Without the
 // variable every call is forwarded to the SDK implementation unchanged.
 //
-// REACH_XUID=<hex> and REACH_GAMERTAG=<name> replace the signed-in profile's
-// XUID and gamertag (the SDK gives every instance 0xB13EBABEBABEBABE "User"),
-// so two instances on one machine are different players in System Link.
+// The signed-in profile's XUID and gamertag come from identity.cpp when it has
+// one (REACH_XUID / REACH_GAMERTAG, or the Live identity with REACH_SERVER); the
+// SDK gives every instance 0xB13EBABEBABEBABE "User".
+
+#include "identity.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -40,20 +42,11 @@ bool NoSignin() {
 
 GuestFunc Sdk(const char* name) { return reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, name)); }
 
-uint64_t XuidOverride() {
-  static const uint64_t xuid = [] {
-    const char* v = std::getenv("REACH_XUID");
-    return v && *v ? std::strtoull(v, nullptr, 16) : 0;
-  }();
-  return xuid;
-}
+uint64_t XuidOverride() { return reach::IdentityXuid(); }
 
 const char* GamertagOverride() {
-  static const char* name = [] {
-    const char* v = std::getenv("REACH_GAMERTAG");
-    return v && *v ? v : nullptr;
-  }();
-  return name;
+  const std::string& name = reach::IdentityGamertag();
+  return name.empty() ? nullptr : name.c_str();
 }
 
 void StoreXuid(uint8_t* p, uint64_t xuid) {
