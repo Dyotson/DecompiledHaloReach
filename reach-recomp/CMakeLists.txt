@@ -30,6 +30,24 @@ endif()
 
 rexglue_setup_target(reach GPU_PLUGINS xenos)
 
+# The SDK's SPIR-V translator takes the texture-fetch exponent bias from the
+# wrong fetch-constant word, which scales Reach's textures by 1/256 (black
+# title menu). tools/build_rexglue_sdk.sh builds a patched plugin; this copies
+# it over the SDK one that rexglue_setup_target() stages next to the binary.
+set(REACH_XENOS_PLUGIN "$ENV{HOME}/rexglue-sdk-patched/0.10.0.24/linux-amd64/lib/librexgpu-xenos.so"
+    CACHE FILEPATH "Patched librexgpu-xenos.so to ship instead of the SDK's")
+if(UNIX AND NOT APPLE)
+    if(EXISTS "${REACH_XENOS_PLUGIN}")
+        add_custom_command(TARGET reach POST_BUILD
+            COMMAND ${CMAKE_COMMAND} -E copy_if_different
+                "${REACH_XENOS_PLUGIN}" "$<TARGET_FILE_DIR:reach>/librexgpu-xenos.so"
+            VERBATIM)
+    else()
+        message(WARNING "Patched GPU plugin not found at ${REACH_XENOS_PLUGIN}; "
+                        "textures will render dark. Run tools/build_rexglue_sdk.sh.")
+    endif()
+endif()
+
 # The SDK runtime dlopen()s guest-DLL modules by bare target name on Linux
 # (no "lib" prefix, no ".so" suffix), so emit the libraries under that name.
 if(UNIX AND NOT APPLE)

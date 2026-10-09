@@ -28,6 +28,14 @@ MCC install (READ ONLY): `/home/dyotson/.local/share/Steam/steamapps/common/Halo
   (fixes `stwcx.` atomics, sync fences and VMX pack aliasing; regenerate with its `bin/rexglue`).
   Build dir `reach-recomp/out/build/linux-nightly`. v0.10.0 is still at `~/rexglue-sdk/linux-amd64`
   (do not build `linux-release` any more: its codegen step would overwrite `generated/` with 0.10.0 output). (`bin/rexglue`, CMake package under `lib/cmake/rexglue`). Docs: https://github.com/rexglue/rexglue-sdk/wiki
+- **Patched GPU plugin (required):** the SDK's Vulkan shader translator scales every texture
+  sample by 2^(bits of the LOD bias) (rexglue-sdk#456, closed upstream as "not accepting Xenos GPU
+  edits"). `tools/build_rexglue_sdk.sh` builds `librexgpu-xenos.so` from the nightly's commit
+  `bd833a2` with `patches/rexglue-sdk/*.patch` into the overlay prefix
+  `~/rexglue-sdk-patched/0.10.0.24/linux-amd64` (source checkout `~/rexglue-sdk-src/sdk`); the reach
+  build copies it next to the binary after each link (`REACH_XENOS_PLUGIN`). Building the SDK on this
+  immutable host uses Homebrew's X11/XCB/Wayland headers (see the script). Upstream will not take GPU
+  fixes, so further Xenos fixes go into `patches/rexglue-sdk/` too.
 - Clang 23 / CMake / Ninja from Homebrew: `/home/linuxbrew/.linuxbrew/bin`.
 - JDK 21: `/home/linuxbrew/.linuxbrew/opt/openjdk@21/libexec`.
 - Build: `cmake -S reach-recomp -B reach-recomp/out/build/linux-release -G Ninja -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=/home/linuxbrew/.linuxbrew/bin/clang++ -DCMAKE_PREFIX_PATH=$HOME/rexglue-sdk/linux-amd64` then `ninja -C reach-recomp/out/build/linux-release`.
@@ -76,11 +84,24 @@ Check exact param names in `endpoints.json` before calling.
   `docs/symbols/default_xex_functions.csv`. Credits/rank/Armory mapped in `docs/progression_re.md`.
   Open blocker: the title menu renders black; see `docs/menu_black_screen.md`.
 
+- 2026-10-09: **title menu fixed.** Root cause was an SDK bug, not game state: the SPIR-V
+  translator read the texture-fetch `exp_adjust` from fetch-constant word 4 instead of word 3, so with
+  Reach's LOD bias every texture sample came back 1/256 as bright (`docs/menu_black_screen.md`).
+  Patched plugin built from source (`tools/build_rexglue_sdk.sh`). Title screen and start menu
+  (Armory, player card with rank/cR) render. Also fixed: directories marked delete-on-close are now
+  deleted (`cache1:\webcache`), and `REACH_NO_SIGNIN=1` mimics Xenia's no-profile setup.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
-  the intro by pressing START at 9 s/10 s and removes orphaned `/dev/shm/xenia_memory_*` (5 GB each;
-  leaked ones fill /dev/shm and every later run dies with SIGBUS).
+  the intro by pressing START at 9 s (`REACH_AUTOPRESS`, the title screen is up by ~15 s) and removes
+  orphaned `/dev/shm/xenia_memory_*` (5 GB each; leaked ones fill /dev/shm and every later run dies
+  with SIGBUS).
+- GPU differential debugging with RenderDoc (how the black menu was solved): capture ours with
+  `REACH_RDCAPTURE=<secs>` under `renderdoccmd capture` (layer setup in `docs/menu_black_screen.md`),
+  capture Xenia with `tools/renderdoc/trigger_capture.py`, then run the `tools/renderdoc/*.py`
+  scripts with `qrenderdoc --python` to match draws, diff constants/textures/interpolators, and
+  swap in instrumented SPIR-V (`instrument.py`) to see intermediate register values.
 - Frame dumps without screenshots: `REACH_FRAMEDUMP=20,28` + `--vulkan_readback_resolve=true`, then
   `tools/frame_to_png.py`. Texture binding trace: `REACH_TEXTRACE=1`. Live guest memory: `tools/guestmem.py`.
   `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.

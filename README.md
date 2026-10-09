@@ -4,10 +4,9 @@ A native PC port of **Halo: Reach (Xbox 360)** built by statically recompiling t
 original PowerPC executable to C++ with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk),
 plus the reverse-engineering notes and tooling needed to get it running.
 
-> **Status: early work in progress.** The recompiled game boots on Linux, creates its
-> threads, mounts its cache partitions, plays the intro Bink video and reaches the
-> title menu, but the menu currently renders black (see
-> [`docs/menu_black_screen.md`](docs/menu_black_screen.md)). It is not playable yet.
+> **Status: early work in progress.** The recompiled game boots on Linux, plays the
+> intro Bink video and renders the title screen and start menu (Armory, player card with
+> rank and cR). Gameplay has not been tested yet.
 
 This repository contains **no game code and no game data**. You need your own copy of
 the game (see [Legal](#legal)).
@@ -47,7 +46,7 @@ the game (see [Legal](#legal)).
 | Native build (Linux, Clang) | Builds and links |
 | Boot | Kernel init, threads, cache partitions, fibers, RSA signature checks |
 | Intro video | Plays |
-| Title menu | Reached and rendered every frame, but the final image is black (investigation in `docs/menu_black_screen.md`) |
+| Title screen and start menu | Render correctly with the patched GPU plugin (the SDK bug behind the black menu is described in `docs/menu_black_screen.md`) |
 | Progression (cR/rank/Armory) | Code mapped, see [`docs/progression_re.md`](docs/progression_re.md) |
 | Online P2P, Forge/file share | Not started |
 
@@ -70,16 +69,19 @@ See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debuggi
 # 1. Extract the game partition from your ISO (read-only on the ISO)
 python3 tools/xdvdfs_extract.py "Halo - Reach.iso" extract extracted/xbox360
 
-# 2. Configure (codegen runs automatically as part of the build)
+# 2. Build the patched Xenos GPU plugin (the stock SDK one renders textures 256x too dark)
+tools/build_rexglue_sdk.sh
+
+# 3. Configure (codegen runs automatically as part of the build)
 cmake -S reach-recomp -B reach-recomp/out/build/linux-nightly -G Ninja \
   -DCMAKE_BUILD_TYPE=Release \
   -DCMAKE_CXX_COMPILER=clang++ \
   -DCMAKE_PREFIX_PATH=$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64
 
-# 3. Build
+# 4. Build
 ninja -C reach-recomp/out/build/linux-nightly
 
-# 4. Run for N seconds (logs go to /tmp/reach_run.log; the intro is skipped automatically)
+# 5. Run for N seconds (logs go to /tmp/reach_run.log; the intro is skipped automatically)
 tools/run_reach.sh 60
 ```
 
@@ -93,7 +95,8 @@ Game saves and the emulated cache partitions are stored under `~/.local/share/re
 | `reach-recomp/hints/` | Function boundary, entry point and native-replacement (`[rexcrt]`) hints |
 | `reach-recomp/src/` | Our runtime code: app setup, kernel overrides, cross-DLL thunks |
 | `reach-recomp/generated/` | Codegen output. **Not committed** here (translated game code), except the SDK's `rexglue.cmake`. The maintainer keeps a private copy, synced with `tools/sync_generated_repo.sh` |
-| `tools/` | Extraction, analysis, run and debug tooling |
+| `patches/rexglue-sdk/` | Fixes we carry on top of the ReXGlue SDK (built by `tools/build_rexglue_sdk.sh`) |
+| `tools/` | Extraction, analysis, run and debug tooling (`tools/renderdoc/`: GPU capture analysis) |
 | `docs/` | Project log, debugging recipes, reverse-engineering notes |
 | `docs/symbols/` | Function names recovered in Ghidra (`address,name` CSV) |
 

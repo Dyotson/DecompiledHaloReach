@@ -92,8 +92,14 @@ void DumpFrontBuffer(uint8_t* base, uint32_t fetch_addr, double seconds, const s
   char name[64];
   std::snprintf(name, sizeof(name), "reach_frame_%07.2f", seconds);
   std::string stem = dir + "/" + name;
+  // The front buffer constant holds a virtual address in one of the physical
+  // mirrors (0xE3044000 for Reach). Read it through that mapping: the 0xE0000000
+  // mirror sits 4 KiB higher in physical memory than the 0xA0000000 one, so
+  // reading the masked address via 0xA0000000 shifts the image by one tile.
+  const uint8_t* src =
+      address >= kPhysicalMirror ? base + address : base + kPhysicalMirror + address;
   if (FILE* f = std::fopen((stem + ".bin").c_str(), "wb")) {
-    std::fwrite(base + kPhysicalMirror + (address & 0x1FFFFFFF), 1, bytes, f);
+    std::fwrite(src, 1, bytes, f);
     std::fclose(f);
   }
   if (FILE* f = std::fopen((stem + ".json").c_str(), "w")) {
@@ -124,22 +130,35 @@ void MaybeInvalidatePhysicalMemory(double now) {
               now, any);
 }
 
+// Captures explicitly with Start/EndFrameCapture spanning a few guest frames:
+// TriggerCapture never produced a file with this runtime's presenter.
 void MaybeTriggerRenderDocCapture(double now) {
   static const double at = [] {
     const char* v = std::getenv("REACH_RDCAPTURE");
     return v ? std::atof(v) : -1.0;
   }();
-  static bool done = false;
-  if (done || at < 0 || now < at) return;
-  done = true;
-  void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
-  auto get_api = lib ? reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(lib, "RENDERDOC_GetAPI")) : nullptr;
-  RENDERDOC_API_1_0_0* api = nullptr;
-  if (get_api && get_api(eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>(&api)) && api) {
-    api->TriggerCapture();
-    REXLOG_INFO("REACH_RDCAPTURE: RenderDoc capture triggered at t={:.2f}s", now);
-  } else {
-    REXLOG_WARN("REACH_RDCAPTURE: RenderDoc is not loaded (run under renderdoccmd capture)");
+  static int state = 0;  // 0 idle, >0 swaps captured so far, -1 done
+  static RENDERDOC_API_1_0_0* api = nullptr;
+  if (state < 0 || at < 0 || now < at) return;
+  if (state == 0) {
+    void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
+    auto get_api =
+        lib ? reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(lib, "RENDERDOC_GetAPI")) : nullptr;
+    if (!get_api || !get_api(eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>(&api)) ||
+        !api) {
+      REXLOG_WARN("REACH_RDCAPTURE: RenderDoc is not loaded (run under renderdoccmd capture)");
+      state = -1;
+      return;
+    }
+    api->StartFrameCapture(nullptr, nullptr);
+    REXLOG_INFO("REACH_RDCAPTURE: capture started at t={:.2f}s", now);
+    state = 1;
+    return;
+  }
+  if (++state > 3) {
+    uint32_t ok = api->EndFrameCapture(nullptr, nullptr);
+    REXLOG_INFO("REACH_RDCAPTURE: capture ended at t={:.2f}s (result {})", now, ok);
+    state = -1;
   }
 }
 

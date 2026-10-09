@@ -1,5 +1,50 @@
 # Investigation: title menu renders black
 
+## Resolved (2026-10-09): SDK shader-translator bug
+
+**Cause.** The ReXGlue SDK's SPIR-V (Vulkan) shader translator applies the texture-fetch
+result exponent bias (`exp_adjust`) from bits 13:18 of fetch-constant **word 4**
+(`src/graphics/pipeline/shader/spirv_translator_fetch.cpp`, "Apply the exponent bias...").
+`exp_adjust` lives in **word 3** (`xe_gpu_texture_fetch_t`); bits 13:18 of word 4 belong to
+`lod_bias`. Reach's texture fetch constants carry `lod_bias = -0.5` (word 4 `0x003f0003`), whose
+bits 13:18 sign-extend to -8, so **every texture sample came back multiplied by 2^-8 = 1/256**.
+Lit UI and scene shaders compute alpha from texture alpha, so their output alpha was ~0 and
+nothing composited: a black screen with a faint "empty" UI layer. Xenia reads word 3. The DXBC
+(D3D12) translator in the SDK is correct, so this only affects Vulkan (Linux, macOS).
+
+Upstream already had the report (rexglue/rexglue-sdk#456, which even lists "Halo: Reach main
+menu renders black") and closed it: "We are not accepting Xenos GPU Emulation edits at this
+time". We therefore carry the patch:
+
+- `patches/rexglue-sdk/0001-spirv-tfetch-exp-adjust-from-word-3.patch`
+- `tools/build_rexglue_sdk.sh` builds `librexgpu-xenos.so` from the nightly's exact commit
+  (`bd833a2`) with our patches and installs it into an overlay prefix
+  `~/rexglue-sdk-patched/0.10.0.24/linux-amd64` (everything else symlinks into the nightly).
+- `reach-recomp/CMakeLists.txt` copies that plugin over the SDK one after every link
+  (`REACH_XENOS_PLUGIN`), and `tools/run_reach.sh` prefers the overlay.
+
+With the patched plugin the title screen (REACH key art, START SOLO CAMPAIGN / MAIN MENU,
+Bungie logo) and the start menu (Armory, player card with rank and cR) render correctly.
+
+**How it was found** (differential RenderDoc debugging, scripts in `tools/renderdoc/`):
+
+1. Captured the same menu frame in our build (`REACH_RDCAPTURE`) and in Xenia (running under
+   `renderdoccmd capture`, triggered with `tools/renderdoc/trigger_capture.py`).
+2. `draws.py` matched the draws by pixel-shader microcode (title art: Xenia EID 1219/1233 vs
+   ours 1664/1683). Pixel history at (576,360): Xenia's shader output (0.634, 0.683, 0.691, 1.0),
+   ours (0.0022, 0.0023, 0.0023, 0.0).
+3. Every input matched: float/bool/fetch constants for the slots used (`cbuffers.py`),
+   texture contents byte for byte (`texdata.py`), view formats/swizzles and samplers
+   (`bindings.py`, `spirv.py`), and interpolators (`postvs.py`).
+4. `instrument.py` replaced the pixel shader with variants that output each Xenos register
+   at the end of the shader: every texture-derived register was exactly 256x smaller than
+   Xenia's (r2.x, two samples multiplied, 65536x). Reading the SPIR-V showed the
+   `OpBitFieldSExtract(word4, 13, 6)` feeding `Ldexp`.
+
+Everything below is the investigation history.
+
+---
+
 Status as of 2026-10-08. Symptom: after the intro video (or after skipping it with START), the
 game reaches the title menu (Xenia shows "REACH", START SOLO CAMPAIGN / MAIN MENU, Bungie logo
 at ~55 s), but the recompiled build presents an almost entirely black frame.
@@ -90,5 +135,8 @@ the 0.10.0.24 nightly behave the same), the `bdz` tail-call codegen bug (fixed, 
   `tools/guestmem.py` works on a running Xenia too, which allows comparing engine state.
 - RenderDoc 1.46 in `~/renderdoc/renderdoc_1.46` with a fixed layer manifest in
   `~/renderdoc/layer`; run under `renderdoccmd capture` with `VK_ADD_IMPLICIT_LAYER_PATH=~/renderdoc/layer
-  ENABLE_VULKAN_RENDERDOC_CAPTURE=1 REACH_RDCAPTURE=<secs>`. The layer loads, but the triggered
-  capture does not produce a file yet (presenter/device mismatch is the likely cause).
+  ENABLE_VULKAN_RENDERDOC_CAPTURE=1 REACH_RDCAPTURE=<secs>` (the hook calls
+  `StartFrameCapture`/`EndFrameCapture` around 3 swaps; RenderDoc's own trigger produced no
+  file). Analyse with `qrenderdoc --python <script>`; it needs
+  `~/.local/share/qrenderdoc/UI.config` with `"Analytics_TotalOptOut": true` or the first-run
+  dialog blocks the script.
