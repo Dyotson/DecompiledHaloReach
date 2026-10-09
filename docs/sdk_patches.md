@@ -21,8 +21,11 @@ Xenia Canary `82d0cd1f4`, the build we use as the reference.
 | 0009 | Shader translator | Scalar ALU operand ignored the Z component when paired with a 3-source vector op (Xenia 92ada8ebc0) | wrong shader math |
 | 0011 | Resolve clears | 64bpp clear value halves swapped (Xenia 16e1eb8e28) | 16_16_16_16 / 32_32 clears in wrong colors |
 | 0013 | Draw filtering | Draws with `kill_pix_post_hi_z` but no VIZ query were rasterized (Xenia draw_util) | proxy geometry drawn into targets |
-| 0016 | Vulkan tessellation | The adaptive tessellation vertex shader converted the edge factor's raw bits to float (`float(value)`) instead of reinterpreting them (`uintBitsToFloat`), so every edge got the maximum factor; 16-in-32 index endianness also applied an 8-in-16 swap (Xenia `tessellation_adaptive.vs`) | needed for water; the GPU hang persists (see below) |
 | 0015 | Vulkan RT transfer | Raw gamma bytes decoded to the lower edge of their linear range before being stored in the R16G16B16A16_UNORM gamma target; UNORM16 rounding then re-encodes some bytes one lower (Xenia decodes to the midpoint, `GammaByteToLinearMidpoint`) | red/green speckled terrain, foliage and stars in the campaign. **Fixed.** |
+| 0016 | Vulkan tessellation | The adaptive tessellation vertex shader converted the edge factor's raw bits to float (`float(value)`) instead of reinterpreting them (`uintBitsToFloat`), so every edge got the maximum factor; 16-in-32 index endianness also applied an 8-in-16 swap (Xenia `tessellation_adaptive.vs`) | needed for water; the GPU hang persists (see below) |
+| 0017 | SPIR-V domain shaders | Triangle domains and patch-indexed quads leave r0.w at 0; Xenia sets it to 1 | none seen yet (tessellated draws) |
+| 0018 | Primitive processor | New option `skip_adaptive_triangle_tessellation` (default on): drops adaptive triangle-patch draws with a one-time warning, because the first one hangs the GPU | not a fix: those surfaces (probably water) are missing |
+| 0019 | Defaults | `execute_unclipped_draw_vs_on_cpu` true, `readback_memexport` false, `gpu_allow_invalid_fetch_constants` true, as in Xenia. Without the first, a screen-space draw with clipping disabled was taken to use the whole EDRAM, so a depth buffer claimed the scene's tiles and the next ownership transfer replaced the lit scene with zeros | black 3D world in gameplay (HUD fine). **Fixed.** |
 
 `experimental/0014` (tessellated triangle strips/fans as lists) is not applied; see its
 README.
@@ -60,11 +63,21 @@ red combine output alone is not a bug. Xenia 82d0cd1 converts only auto-indexed 
 triangle strips/fans to lists; indexed ones still hit `default: return false` there, so the
 dropped indexed strips are not a difference between the two.
 
+## The black gameplay world (fixed by 0019)
+
+In gameplay the 3D world was black while the HUD drew. A capture of such a frame showed the
+tone-map pass reading an all-zero scene; bisecting the HDR scene target found an ownership
+transfer (EID 11431) that copied a freshly created R10G10B10A2 target over it. Before that,
+the resolve of tile 675 dumped its EDRAM from a *depth* buffer at base 1350: the SDK believed
+the depth buffer owned the scene's tiles because a draw with clipping disabled was assumed to
+cover all of EDRAM. Xenia estimates such draws' extent by running the vertex shader on the CPU
+(`execute_unclipped_draw_vs_on_cpu`, default true; the SDK had it false). Its help text
+describes exactly this corruption. Setting it also removed the cyan/teal cast on foliage.
+
 Open GPU issues in the campaign (Winter Contingency):
 
-- Faint cyan speckles on the near ground in the Falcon landing shot (Xenia: plain dirt).
-  Probably another gamma/7e3 round trip; the same-layout 8888 <-> gamma transfer still decodes
-  to the lower edge (as Xenia does).
+- Faint cyan speckles on the near ground in the Falcon landing shot were seen before 0019;
+  recheck (0019 removed the teal cast in gameplay).
 - About 4 indexed, discrete-tessellated triangle strip draws per frame are dropped
   ("Unsupported tessellation mode 0 for primitive type 6"); Xenia 82d0cd1 drops indexed ones
   too (it converts auto-indexed strips/fans only, see `experimental/0014`).
@@ -73,7 +86,10 @@ Open GPU issues in the campaign (Winter Contingency):
   points at the first adaptive-tessellation draw (`kTrianglePatch`, 5142 float32 edge factors,
   8-in-32, `VGT_HOS_MAX_TESS_LEVEL` 15; probably water): the very first one hangs, and
   skipping those draws avoids the hang (the run then reaches gameplay). 0016 fixed the factor
-  decoding but not the hang; hull shaders and domain-shader register setup match Xenia, so the
-  translated domain or pixel shader is the next suspect.
+  decoding but not the hang. Hull shaders, domain-shader execution modes and register setup
+  (0017) now match Xenia; neither the domain nor the pixel shader has an unbounded loop (the
+  pixel shader's one guest loop is bounded by a loop constant). 0018 skips these draws by
+  default. Next: inspect the draw's inputs in a capture made just before it (or with the
+  pixel shader replaced) instead of hanging the GPU again.
 - The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
   `d3d12_render_target_cache.cc`) before Windows builds.

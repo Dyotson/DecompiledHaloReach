@@ -1,0 +1,38 @@
+--- a/src/graphics/util/draw_extent_estimator.cpp
++++ b/src/graphics/util/draw_extent_estimator.cpp
+@@ -24,7 +24,10 @@
+ #include <rex/memory.h>
+ #include <rex/ui/graphics_util.h>
+ 
+-REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu, false, "GPU",
++// Default true as in Xenia: otherwise draws with clipping disabled can claim up
++// to the entire EDRAM, and the resulting ownership transfers wipe other render
++// targets (Halo: Reach gameplay rendered black).
++REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu, true, "GPU",
+                     "Execute unclipped draw vertex shader on CPU");
+ 
+ REXCVAR_DEFINE_BOOL(execute_unclipped_draw_vs_on_cpu_with_scissor, false, "GPU",
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -59,7 +59,8 @@
+                     "scaled block during resolve readback downscale")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+ 
+-REXCVAR_DEFINE_BOOL(readback_memexport, true, "GPU",
++// Default false as in Xenia.
++REXCVAR_DEFINE_BOOL(readback_memexport, false, "GPU",
+                     "Enable CPU readback of shader memexport writes for guest memory "
+                     "coherency (can reduce correctness issues, but may add GPU/CPU sync cost)")
+     .lifecycle(rex::cvar::Lifecycle::kHotReload);
+--- a/src/graphics/flags.cpp
++++ b/src/graphics/flags.cpp
+@@ -13,7 +13,8 @@
+ #include <rex/logging.h>
+ #include <rex/ui/renderdoc_api.h>
+ 
+-REXCVAR_DEFINE_BOOL(gpu_allow_invalid_fetch_constants, false, "GPU",
++// Default true as in Xenia.
++REXCVAR_DEFINE_BOOL(gpu_allow_invalid_fetch_constants, true, "GPU",
+                     "Allow invalid fetch constants");
+ REXCVAR_DEFINE_BOOL(native_2x_msaa, true, "GPU", "Enable native 2x MSAA");
+ REXCVAR_DEFINE_BOOL(depth_float24_round, false, "GPU", "Round float24 depth values");

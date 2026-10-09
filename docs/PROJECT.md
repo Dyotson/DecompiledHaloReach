@@ -144,6 +144,16 @@ Check exact param names in `endpoints.json` before calling.
   first adaptive-tessellation draw (patch 0016 is part of it), black 3D world in most gameplay
   frames (HUD fine), cyan tint on foliage.
 
+- 2026-10-09 (afternoon): **gameplay renders.** The black 3D world was the SDK defaulting
+  `execute_unclipped_draw_vs_on_cpu` to false: an unclipped screen-space draw claimed all of
+  EDRAM, a depth buffer took over the scene's tiles and a transfer wiped the scene (SDK patch
+  0019 restores Xenia's defaults; trace in `docs/sdk_patches.md`). Patch 0017 sets r0.w = 1 in
+  domain shaders as Xenia does; 0018 drops adaptive triangle-patch draws by default
+  (`--skip_adaptive_triangle_tessellation=false` to draw them) because the first one still hangs
+  the GPU. A default `tools/run_reach.sh` run now plays the opening and reaches the "locate
+  distress beacon" objective with the world lit like Xenia. Missing: those tessellated surfaces
+  (probably water).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

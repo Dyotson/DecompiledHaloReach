@@ -5,8 +5,9 @@ original PowerPC executable to C++ with the [ReXGlue SDK](https://github.com/rex
 plus the reverse-engineering notes and tooling needed to get it running.
 
 > **Status: early work in progress.** The recompiled game boots on Linux, renders the
-> menus and plays the first campaign mission's opening cinematic with correct lighting.
-> It does not reach gameplay yet: a GPU hang ends runs a few minutes into the mission.
+> menus, plays the first campaign mission's opening cinematic and reaches gameplay with
+> the world rendered like in Xenia. Adaptively tessellated surfaces (probably water) are
+> still skipped because they hang the GPU.
 
 This repository contains **no game code and no game data**. You need your own copy of
 the game (see [Legal](#legal)).
@@ -47,7 +48,7 @@ the game (see [Legal](#legal)).
 | Boot | Kernel init, threads, cache partitions, fibers, RSA signature checks |
 | Intro video | Plays |
 | Title screen and start menu | Render correctly with the patched GPU plugin (the SDK bug behind the black menu is described in `docs/menu_black_screen.md`) |
-| Campaign (Winter Contingency) | Loads; cinematics render like Xenia after 12 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); GPU hang a few minutes in |
+| Campaign (Winter Contingency) | Loads, plays the opening and reaches gameplay; rendering matches Xenia after 16 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); adaptive tessellation (water) skipped |
 | Progression (cR/rank/Armory) | Code mapped, see [`docs/progression_re.md`](docs/progression_re.md) |
 | Online P2P, Forge/file share | Not started |
 

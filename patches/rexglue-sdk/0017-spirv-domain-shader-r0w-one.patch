@@ -1,0 +1,44 @@
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -1879,10 +1879,12 @@
+       };
+       switch (shader_modification.vertex.host_vertex_shader_type) {
+         case Shader::HostVertexShaderType::kTriangleDomainCPIndexed:
+-          // r0.xyz = domain location zyx, r1.xyz = control point indices.
++          // r0.xyz = domain location zyx, r0.w = 1 (as in Xenia), r1.xyz =
++          // control point indices.
+           store_register_component(0, 0, load_tess_coord_component(2));
+           store_register_component(0, 1, load_tess_coord_component(1));
+           store_register_component(0, 2, load_tess_coord_component(0));
++          store_register_component(0, 3, const_float_1_);
+           if (register_count() >= 2) {
+             store_register_component(1, 0, load_patch_control_point_index(0));
+             store_register_component(1, 1, load_patch_control_point_index(1));
+@@ -1890,10 +1892,12 @@
+           }
+           break;
+         case Shader::HostVertexShaderType::kTriangleDomainPatchIndexed:
+-          // r0.xyz = domain location zyx, r1.x = patch index, r1.y = swizzle.
++          // r0.xyz = domain location zyx, r0.w = 1 (as in Xenia), r1.x = patch
++          // index, r1.y = swizzle.
+           store_register_component(0, 0, load_tess_coord_component(2));
+           store_register_component(0, 1, load_tess_coord_component(1));
+           store_register_component(0, 2, load_tess_coord_component(0));
++          store_register_component(0, 3, const_float_1_);
+           if (register_count() >= 2) {
+             store_register_component(1, 0, load_patch_control_point_index(0));
+             store_register_component(1, 1, const_float_0_);
+@@ -1911,10 +1915,12 @@
+           }
+           break;
+         case Shader::HostVertexShaderType::kQuadDomainPatchIndexed:
+-          // r0.x = patch index, r0.yz = domain location xy, r1.x = swizzle.
++          // r0.x = patch index, r0.yz = domain location xy, r0.w = 1 (as in
++          // Xenia), r1.x = swizzle.
+           store_register_component(0, 0, load_patch_control_point_index(0));
+           store_register_component(0, 1, load_tess_coord_component(0));
+           store_register_component(0, 2, load_tess_coord_component(1));
++          store_register_component(0, 3, const_float_1_);
+           if (register_count() >= 2) {
+             store_register_component(1, 0, const_float_0_);
+           }
