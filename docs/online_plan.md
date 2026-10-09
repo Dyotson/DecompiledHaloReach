@@ -1,9 +1,10 @@
 # P2P online: findings and plan
 
-Status (2026-10-09, evening): M0 and M1 done, M2 partly. `reach-recomp/src/kernel/net.cpp`
+Status (2026-10-09, night): M0, M1 and M2 done: two instances on one machine join the same
+System Link lobby. `reach-recomp/src/kernel/net.cpp`
 implements the virtual network described in section 4 behind `REACH_NET=1`. Two instances
-on one machine see each other: each lists the other's party under "System Link" with its
-gamertag, rank and player card, and offers "Join". Joining does not work yet (next section).
+on one machine see each other, and one joins the other's lobby (both show "2/16" with both
+gamertags). `tools/system_link_pair.sh` sets this up.
 "Guess" marks statements not confirmed by code or a run.
 
 ## Progress log
@@ -32,9 +33,12 @@ gamertag, rank and player card, and offers "Join". Joining does not work yet (ne
   and kept a "content operation in flight" flag up (byte 0x8391DEB8), which gates the join
   update. `src/kernel/xam_enumerate.cpp` fixes the completion codes. Now the joiner registers
   the host's key, resolves its address, waits 8 s without sending anything but discovery,
-  then sends join-abort (out-of-band message 10) to the host's port 1001, which answers
-  join-refuse (11); the UI says "UNABLE TO JOIN: incompatible network setup". Open: what the
-  joiner waits for before sending join-request.
+  then sent join-abort (out-of-band message 10). The wait was for a secure connection that
+  never started: Reach calls `XNetConnect` only for addresses whose first byte is 0
+  (`sub_82273FD0`), which is what XNetXnAddrToInAddr returns on a 360, and our virtual IPs
+  were 10.77.0.N. With 0.77.0.N the joiner connects, sends join-request (message 8, first
+  byte 0x90) to the host's port 1001, the host connects back and the session traffic
+  (membership, parameters, players) flows on port 1000.
 - **Discovery packets** are Blam bitstreams: a 13-byte `broadcast-search` (type byte, a
   constant, 8-byte nonce) and a 151-169-byte `broadcast-reply` echoing the nonce and carrying,
   bit-packed, the host's XNADDR, the game mode name in UTF-16 and the host's XUID.

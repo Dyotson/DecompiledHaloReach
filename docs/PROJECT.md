@@ -203,19 +203,22 @@ Check exact param names in `endpoints.json` before calling.
   miss shots: set `REACH_RDCAPTURE_TRIGGER=<file>` and touch that file to capture (the file is
   polled every 10 swaps and deleted), e.g. from a loop that converts periodic `REACH_FRAMEDUMP`s
   and checks them. `/tmp` is RAM-backed here; delete captures you are done with.
-- Stepping through menus by hand: start with `REACH_AUTOPRESS_FIFO=<fifo>` (made with `mkfifo`)
-  and `REACH_FRAMEDUMP_TRIGGER=<file>` + `REACH_FRAMEDUMP_DIR=<dir>`, write inputs such as
-  `A`, `UP` or `START:0.5` to the FIFO one per line, touch the trigger file and convert the new
-  dump with `tools/frame_to_png.py`. `--headless=true` answers system dialogs (keyboard, device
-  selector) with their defaults, which scripted Forge saves need; without it they are ImGui
-  overlays that frame dumps don't show. If the newest dump is older than the trigger, the game
-  has stopped presenting.
+- Stepping through menus by hand: `tools/live_session.sh DIR` starts the game in the
+  background with an input FIFO; `tools/live_step.sh DIR WAIT [INPUT...]` presses inputs
+  (`A`, `UP`, `START:0.5`), waits and writes a screenshot to `DIR/last.png`;
+  `tools/menu_state.py title|main PNG` reads which title/main menu item is highlighted (the
+  game remembers the last choice in the profile, so never count presses). `--headless=true`
+  answers system dialogs (keyboard, device selector) with their defaults, which scripted
+  Forge saves need; without it they are ImGui overlays that frame dumps don't show. If
+  `live_step.sh` prints "no frame", the game has stopped presenting.
+- System Link on one machine: `tools/system_link_pair.sh DIR_A DIR_B` starts two instances
+  with the virtual network (`REACH_NET=1`; the second gets its own profile, XUID and
+  gamertag via `REACH_INSTANCE=2`), makes A host a Firefight lobby and selects A's party on
+  B. `echo X:0.3 > DIR_B/in.fifo` presses "Join". `REACH_NETTRACE=packets` logs datagrams.
 - `qrenderdoc --python` crashes with "Illegal instruction" under `QT_QPA_PLATFORM=offscreen`;
   run it without that variable.
-- Two instances on one machine (System Link tests): give the second its own `XDG_DATA_HOME`,
-  `REACH_XUID`/`REACH_GAMERTAG`, FIFO, dump directory and `--log_file`; start both with
-  `REACH_NET=1`. Each takes about 6 GB of RAM and 5 GB of `/dev/shm`. Keep `REACH_NETTRACE`
-  off for long runs: it logs gigabytes into RAM-backed `/tmp`.
+- Each instance takes about 6 GB of RAM and 5 GB of `/dev/shm`. `REACH_NETTRACE=1` logs every
+  network call; prefer `REACH_NETTRACE=packets` for long runs (logs go to RAM-backed `/tmp`).
 - Frame dumps without screenshots: `REACH_FRAMEDUMP=20,28` + `--vulkan_readback_resolve=true`, then
   `tools/frame_to_png.py`. Texture binding trace: `REACH_TEXTRACE=1`. Live guest memory: `tools/guestmem.py`.
   `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.

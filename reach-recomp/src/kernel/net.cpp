@@ -12,9 +12,10 @@
 //   REACH_NET_LAN=1 also to 255.255.255.255 (other machines).
 // - XNetGetTitleXnAddr describes this instance by its host IP (REACH_NET_IP,
 //   else 127.0.0.1, or the LAN address with REACH_NET_LAN=1) and host port.
-//   XNetXnAddrToInAddr maps a peer's XNADDR to a virtual IP 10.77.0.N that
+//   XNetXnAddrToInAddr maps a peer's XNADDR to a virtual IP 0.77.0.N (a 360
+//   secure address: the game connects only to addresses whose first byte is 0) that
 //   sendto/recvfrom translate back to the peer's host endpoint (this instance
-//   is 10.77.0.1).
+//   is 0.77.0.1).
 // - XNetRandom returns random bytes (the SDK's are constant). Keys are random
 //   system-link keys; registering, connecting and QoS listen
 //   succeed. VDP is sent unencrypted: only copies of this port talk to it.
@@ -153,7 +154,7 @@ void LogPacket(const char* dir, uint32_t vip, uint16_t source_port, uint16_t por
   for (size_t i = 0; i < std::min<size_t>(size, 256); ++i) {
     std::snprintf(hex + 3 * i, 4, "%02X ", data[i]);
   }
-  REXLOG_INFO("REACH_NET {} {} bytes {}:{} -> port {} vip {:08X} [{}] #{}", dir, size, vip >> 24 == 10 ? "vip" : "ip",
+  REXLOG_INFO("REACH_NET {} {} bytes {}:{} -> port {} vip {:08X} [{}] #{}", dir, size, (vip >> 16) == 0x004D ? "vip" : "ip",
               source_port, port, vip, hex, n);
 }
 
@@ -162,8 +163,10 @@ constexpr uint32_t kMagic = 0x524E4554;       // 'RNET', first word of every dat
 constexpr size_t kHeaderSize = 8;             // magic, guest source port, guest destination port
 constexpr uint16_t kHostPortFirst = 21000;
 constexpr uint16_t kHostPortCount = 8;
-constexpr uint32_t kSelfVip = 0x0A4D0001;  // 10.77.0.1
-constexpr uint32_t kVipNet = 0x0A4D0000;   // 10.77.0.0/16
+// Secure addresses as XNetXnAddrToInAddr returns them on a 360: first byte 0.
+// Reach only connects to such addresses (sub_82273FD0).
+constexpr uint32_t kSelfVip = 0x004D0001;  // 0.77.0.1
+constexpr uint32_t kVipNet = 0x004D0000;   // 0.77.0.0/16
 constexpr uint32_t kBroadcast = 0xFFFFFFFF;
 
 struct Datagram {
@@ -341,7 +344,7 @@ class VNet {
     uint32_t vip = kVipNet + next_vip_++;
     vip_by_endpoint_[key] = vip;
     endpoint_by_vip_[vip] = endpoint;
-    REXLOG_INFO("REACH_NET: peer {}.{}.{}.{}:{} is 10.77.{}.{}", endpoint.ip >> 24,
+    REXLOG_INFO("REACH_NET: peer {}.{}.{}.{}:{} is 0.77.{}.{}", endpoint.ip >> 24,
                 (endpoint.ip >> 16) & 0xFF, (endpoint.ip >> 8) & 0xFF, endpoint.ip & 0xFF,
                 endpoint.port, (vip >> 8) & 0xFF, vip & 0xFF);
     return vip;
