@@ -62,7 +62,14 @@ bool EnvFlag(const char* name) {
   return v && *v && *v != '0';
 }
 
+// REACH_NETTRACE=1 traces calls and datagrams, REACH_NETTRACE=packets only datagrams.
 bool NetTrace() {
+  static const bool enabled = EnvFlag("REACH_NETTRACE") &&
+                              std::string(std::getenv("REACH_NETTRACE")) != "packets";
+  return enabled;
+}
+
+bool PacketTrace() {
   static const bool enabled = EnvFlag("REACH_NETTRACE");
   return enabled;
 }
@@ -141,9 +148,9 @@ void LogPacket(const char* dir, uint32_t vip, uint16_t source_port, uint16_t por
                const uint8_t* data, size_t size) {
   static std::atomic<uint64_t> count{0};
   uint64_t n = count.fetch_add(1, std::memory_order_relaxed);
-  if (!NetTrace() || (n >= 400 && n % 500 != 0)) return;
-  char hex[3 * 24 + 1] = {};
-  for (size_t i = 0; i < std::min<size_t>(size, 24); ++i) {
+  if (!PacketTrace() || (n >= 2000 && n % 500 != 0)) return;
+  char hex[3 * 256 + 1] = {};
+  for (size_t i = 0; i < std::min<size_t>(size, 256); ++i) {
     std::snprintf(hex + 3 * i, 4, "%02X ", data[i]);
   }
   REXLOG_INFO("REACH_NET {} {} bytes {}:{} -> port {} vip {:08X} [{}] #{}", dir, size, vip >> 24 == 10 ? "vip" : "ip",
