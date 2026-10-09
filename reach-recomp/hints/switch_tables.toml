@@ -1,0 +1,18 @@
+# Jump tables that codegen recovered with the wrong number of entries. The
+# compiler emitted no bounds check before these `bctr`s, so codegen could not
+# size the table; listing the targets here makes it emit the full switch.
+
+# sub_82276B90 dispatches the network session state (state 1..10 at
+# this+0x61D30, r11 = state - 1) through the table at 0x82276BE4. Codegen kept
+# one entry, so every other state hit `__builtin_trap()`; the trap handler
+# re-ran the trap forever and selecting System Link froze the game. Entries 3,
+# 5 and 7 point just past the function (the start of sub_82276DA8), MSVC's
+# marker for unreachable cases; codegen emits them as tail calls.
+[functions]
+0x82276B90 = { name = "sub_82276B90", end = 0x82276DA8 }
+
+[[switch_tables]]
+address = 0x82276BE0
+register = 11
+labels = [0x82276C14, 0x82276C1C, 0x82276DA8, 0x82276C0C, 0x82276DA8,
+          0x82276C2C, 0x82276DA8, 0x82276C2C, 0x82276D18, 0x82276D30]
