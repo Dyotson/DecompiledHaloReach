@@ -91,6 +91,14 @@ Check exact param names in `endpoints.json` before calling.
   (Armory, player card with rank/cR) render. Also fixed: directories marked delete-on-close are now
   deleted (`cache1:\webcache`), and `REACH_NO_SIGNIN=1` mimics Xenia's no-profile setup.
 
+- 2026-10-09 (later): **campaign starts.** START, A on START SOLO CAMPAIGN, A on Normal loads
+  Winter Contingency: the loading cinematic, the in-engine opening cinematic (Warthog, Falcon, Noble Team
+  briefing) and Noble Six at the base render. Open issue: terrain/foliage show saturated red/green
+  patches that change every frame. Traced to the lighting buffer texture (`k_2_10_10_10_AS_16_16_16_16`
+  at 0x02354000) that an EDRAM resolve fills; it contains garbage in our build. Two more SDK porting bugs
+  found by diffing against Xenia and patched (stacked-texture layer lerp, missing layer clamp), but they
+  are not the red-patch cause.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

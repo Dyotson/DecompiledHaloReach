@@ -11,8 +11,9 @@
 // whole 0xA0000000 mirror once at that time, forcing the GPU to drop and
 // re-upload every watched texture (diagnoses stale GPU texture copies).
 //
-// REACH_RDCAPTURE="25" asks RenderDoc (when the game runs under renderdoccmd)
-// to capture the next frame at that time, without needing keyboard focus.
+// REACH_RDCAPTURE="25,90" asks RenderDoc (when the game runs under renderdoccmd)
+// to capture a few frames at each of those times, without needing keyboard
+// focus. Each capture is a separate .rdc file.
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -53,21 +54,28 @@ struct Schedule {
   std::string dir = "/tmp";
 };
 
+// Parses "12,30.5,60" into sorted seconds.
+std::vector<double> ParseTimes(const char* spec) {
+  std::vector<double> times;
+  std::string s(spec ? spec : "");
+  size_t pos = 0;
+  while (pos < s.size()) {
+    size_t end = s.find(',', pos);
+    if (end == std::string::npos) end = s.size();
+    times.push_back(std::atof(s.substr(pos, end - pos).c_str()));
+    pos = end + 1;
+  }
+  std::sort(times.begin(), times.end());
+  return times;
+}
+
 Schedule& GetSchedule() {
   static Schedule schedule;
   static std::once_flag once;
   std::call_once(once, [] {
     if (const char* dir = std::getenv("REACH_FRAMEDUMP_DIR")) schedule.dir = dir;
     if (const char* spec = std::getenv("REACH_FRAMEDUMP")) {
-      std::string s(spec);
-      size_t pos = 0;
-      while (pos < s.size()) {
-        size_t end = s.find(',', pos);
-        if (end == std::string::npos) end = s.size();
-        schedule.times.push_back(std::atof(s.substr(pos, end - pos).c_str()));
-        pos = end + 1;
-      }
-      std::sort(schedule.times.begin(), schedule.times.end());
+      schedule.times = ParseTimes(spec);
       REXLOG_INFO("REACH_FRAMEDUMP: {} dumps scheduled into {}", schedule.times.size(),
                   schedule.dir);
     }
@@ -133,33 +141,35 @@ void MaybeInvalidatePhysicalMemory(double now) {
 // Captures explicitly with Start/EndFrameCapture spanning a few guest frames:
 // TriggerCapture never produced a file with this runtime's presenter.
 void MaybeTriggerRenderDocCapture(double now) {
-  static const double at = [] {
-    const char* v = std::getenv("REACH_RDCAPTURE");
-    return v ? std::atof(v) : -1.0;
-  }();
-  static int state = 0;  // 0 idle, >0 swaps captured so far, -1 done
+  static const std::vector<double> times = ParseTimes(std::getenv("REACH_RDCAPTURE"));
+  static size_t next = 0;
+  static int swaps = 0;  // swaps captured so far in the open capture, 0 when idle
   static RENDERDOC_API_1_0_0* api = nullptr;
-  if (state < 0 || at < 0 || now < at) return;
-  if (state == 0) {
+  if (swaps > 0) {
+    if (++swaps > 3) {
+      uint32_t ok = api->EndFrameCapture(nullptr, nullptr);
+      REXLOG_INFO("REACH_RDCAPTURE: capture ended at t={:.2f}s (result {})", now, ok);
+      swaps = 0;
+    }
+    return;
+  }
+  if (next >= times.size() || now < times[next]) return;
+  while (next < times.size() && times[next] <= now) ++next;
+  if (!api) {
     void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
     auto get_api =
         lib ? reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(lib, "RENDERDOC_GetAPI")) : nullptr;
     if (!get_api || !get_api(eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>(&api)) ||
         !api) {
       REXLOG_WARN("REACH_RDCAPTURE: RenderDoc is not loaded (run under renderdoccmd capture)");
-      state = -1;
+      api = nullptr;
+      next = times.size();
       return;
     }
-    api->StartFrameCapture(nullptr, nullptr);
-    REXLOG_INFO("REACH_RDCAPTURE: capture started at t={:.2f}s", now);
-    state = 1;
-    return;
   }
-  if (++state > 3) {
-    uint32_t ok = api->EndFrameCapture(nullptr, nullptr);
-    REXLOG_INFO("REACH_RDCAPTURE: capture ended at t={:.2f}s (result {})", now, ok);
-    state = -1;
-  }
+  api->StartFrameCapture(nullptr, nullptr);
+  REXLOG_INFO("REACH_RDCAPTURE: capture started at t={:.2f}s", now);
+  swaps = 1;
 }
 
 }  // namespace
