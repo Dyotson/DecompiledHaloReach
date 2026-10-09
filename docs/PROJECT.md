@@ -154,6 +154,25 @@ Check exact param names in `endpoints.json` before calling.
   distress beacon" objective with the world lit like Xenia. Missing: those tessellated surfaces
   (probably water).
 
+- 2026-10-09 (evening): **Forge works, and the Armory shows the Spartan.**
+  - Forge: lobby, map list (Local Files), Sword Base, editing mode, object placement and budget,
+    "Save As New Map" (a BLF map variant under `~/.local/share/reach/<xuid>/4D53085B/00000001/`;
+    it appears in the lobby and the variant list), ending the game, carnage report, and cR for
+    the session.
+  - Fixes:
+    - The SDK's headless keyboard (`--headless=true`) returned its default text byte-swapped,
+      so saved maps were named in CJK glyphs; `src/kernel/xam_keyboard.cpp` overrides
+      `XamShowKeyboardUI` in headless mode.
+    - The Spartan was missing from the Armory preview and the post-game screens: a full-screen
+      rectangle with W = 0 that sets the model's alpha was clipped on the host (SDK patch 0021;
+      Xenia has the same gap; trace in `docs/sdk_patches.md`).
+  - Open:
+    - Once, entering the Forge lobby froze the game: a new guest thread faulted forever on a
+      null virtual call inside the runtime's `XThread::Create` start lambda (gdb: the thread
+      sat in `ExceptionHandlerCallback`, re-running `mov (%r14),%rax` with r14 = 0). It did not
+      reproduce on the next run.
+    - D-pad DOWN is sometimes ignored in menus during FIFO sessions (UP works; menus wrap).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
@@ -169,6 +188,15 @@ Check exact param names in `endpoints.json` before calling.
   miss shots: set `REACH_RDCAPTURE_TRIGGER=<file>` and touch that file to capture (the file is
   polled every 10 swaps and deleted), e.g. from a loop that converts periodic `REACH_FRAMEDUMP`s
   and checks them. `/tmp` is RAM-backed here; delete captures you are done with.
+- Stepping through menus by hand: start with `REACH_AUTOPRESS_FIFO=<fifo>` (made with `mkfifo`)
+  and `REACH_FRAMEDUMP_TRIGGER=<file>` + `REACH_FRAMEDUMP_DIR=<dir>`, write inputs such as
+  `A`, `UP` or `START:0.5` to the FIFO one per line, touch the trigger file and convert the new
+  dump with `tools/frame_to_png.py`. `--headless=true` answers system dialogs (keyboard, device
+  selector) with their defaults, which scripted Forge saves need; without it they are ImGui
+  overlays that frame dumps don't show. If the newest dump is older than the trigger, the game
+  has stopped presenting.
+- `qrenderdoc --python` crashes with "Illegal instruction" under `QT_QPA_PLATFORM=offscreen`;
+  run it without that variable.
 - Frame dumps without screenshots: `REACH_FRAMEDUMP=20,28` + `--vulkan_readback_resolve=true`, then
   `tools/frame_to_png.py`. Texture binding trace: `REACH_TEXTRACE=1`. Live guest memory: `tools/guestmem.py`.
   `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.

@@ -1,0 +1,43 @@
+--- a/src/graphics/pipeline/shader/spirv_translator.cpp
++++ b/src/graphics/pipeline/shader/spirv_translator.cpp
+@@ -2465,6 +2465,17 @@
+   position_w = builder_->createTriOp(spv::OpSelect, type_float_, is_w_not_reciprocal, position_w,
+                                      guest_position_w_inv);
+ 
++  // A W of exactly 0 makes the Xenos divide X and Y to infinity, and a
++  // rectangle drawn with clipping disabled then covers the whole render target
++  // (Halo: Reach fills the Armory model's alpha with a screen-space rectangle
++  // whose shader fetches the position as xy0_ and exports it as xyzz). The host
++  // clips any primitive with W = 0 instead, so draw such vertices with W = 1
++  // and X and Y far outside the viewport, in the direction of their sign.
++  spv::Id position_w_is_zero =
++      builder_->createBinOp(spv::OpFOrdEqual, type_bool_, position_w, const_float_0_);
++  position_w = builder_->createTriOp(spv::OpSelect, type_float_, position_w_is_zero,
++                                     const_float_1_, position_w);
++
+   spv::Id position_xyz;
+ 
+   // Open a scope since position_xy and position_z won't be synchronized anymore
+@@ -2489,6 +2500,22 @@
+         spv::OpSelect, type_float2_,
+         builder_->smearScalar(spv::NoPrecision, is_xy_divided_by_w, type_bool2_),
+         guest_position_xy_mul_w, position_xy);
++    // XY not yet divided by a W of 0 would be infinite on the Xenos (2^16 keeps
++    // the host clipper's arithmetic exact).
++    spv::Id position_xy_at_infinity = builder_->createNoContractionBinOp(
++        spv::OpVectorTimesScalar, type_float2_,
++        builder_->createUnaryBuiltinCall(type_float2_, ext_inst_glsl_std_450_, GLSLstd450FSign,
++                                         position_xy),
++        builder_->makeFloatConstant(65536.0f));
++    position_xy = builder_->createTriOp(
++        spv::OpSelect, type_float2_,
++        builder_->smearScalar(
++            spv::NoPrecision,
++            builder_->createBinOp(
++                spv::OpLogicalAnd, type_bool_, position_w_is_zero,
++                builder_->createUnaryOp(spv::OpLogicalNot, type_bool_, is_xy_divided_by_w)),
++            type_bool2_),
++        position_xy_at_infinity, position_xy);
+ 
+     // Check if the shader returns Z/W rather than Z, and if it does, revert
+     // that.

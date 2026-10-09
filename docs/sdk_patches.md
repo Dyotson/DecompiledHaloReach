@@ -27,6 +27,7 @@ Xenia Canary `82d0cd1f4`, the build we use as the reference.
 | 0018 | Primitive processor | New option `skip_adaptive_triangle_tessellation` (default on): drops adaptive triangle-patch draws with a one-time warning, because the first one hangs the GPU | not a fix: those surfaces (probably water) are missing |
 | 0019 | Defaults | `execute_unclipped_draw_vs_on_cpu` true, `readback_memexport` false, `gpu_allow_invalid_fetch_constants` true, as in Xenia. Without the first, a screen-space draw with clipping disabled was taken to use the whole EDRAM, so a depth buffer claimed the scene's tiles and the next ownership transfer replaced the lit scene with zeros | black 3D world in gameplay (HUD fine). **Fixed.** |
 | 0020 | VIZ queries | `PA_SC_VIZ_QUERY_STATUS` bits were set ("visible") at every VIZ_QUERY end and never cleared; Xenia leaves the register alone | none seen |
+| 0021 | SPIR-V vertex position | A vertex position with W = 0 is clipped on the host; on the Xenos X/W and Y/W go to infinity and a rectangle drawn with clipping disabled covers the target. Now W = 1 and X, Y = ±2^16 (Xenia has the same gap) | Spartan missing from the Armory preview and the post-game/PROMOTED screens. **Fixed.** |
 
 `experimental/0014` (tessellated triangle strips/fans as lists) is not applied; see its
 README.
@@ -75,6 +76,31 @@ cover all of EDRAM. Xenia estimates such draws' extent by running the vertex sha
 (`execute_unclipped_draw_vs_on_cpu`, default true; the SDK had it false). Its help text
 describes exactly this corruption. Setting it also removed the cyan/teal cast on foliage.
 
+## The missing Armory Spartan (fixed by 0021)
+
+The Armory preview panel and the post-game screens (CREDITS EARNED, PROMOTED) were empty. The
+Spartan itself renders fine: an off-screen 640x576 pass draws it into a G-buffer, lights it
+into an 8888 target, resolves that to 0x0240E000, and the UI composites the texture with
+premultiplied alpha (`src + dst * (1 - src.a)`), so its alpha channel is the model's coverage.
+The material draws leave alpha at 0 on the model. Two full-screen rectangles end the pass: the
+first writes alpha = 1 everywhere (alpha-only write mask, no depth test); the second, depth
+tested, clears colour and alpha to 0 on the background. The first never rasterized, so the
+model went out with alpha 0 and the composite drew nothing.
+
+Its vertex shader (`shader_18355F1696162C19` with `--dump_shaders`) is one of Bungie's
+screen-space rectangle shaders, but fetches the position as `xy0_` where the others use `xy1_`,
+and exports `oPos = r1.xyzz`: W is 0. `PA_CL_VTE_CNTL` says W is not reciprocal and X/Y are not
+divided, so the Xenos divides X and Y by 0 and, with clipping disabled, the rectangle covers the
+whole target. A host GPU clips every primitive with W = 0. 0021 makes the vertex epilogue emit
+W = 1 and X, Y = sign * 2^16 for such vertices (the first try, a tiny positive W, covered only
+half the panel: the clipper's `1 + w` rounded to 1). Xenia 82d0cd1 has the same empty panel and
+the same clipped draw.
+
+Found with a RenderDoc capture of the helmet screen: `savetex.py` on the composite draw showed
+the texture's RGB holding the lit Spartan and alpha 0 everywhere; saving the off-screen target
+at each draw of the lighting pass found the draw that should set alpha, the pixel history listed
+no fragments for it, and `postvs.py` showed W = 0.
+
 Open GPU issues in the campaign (Winter Contingency):
 
 - Faint cyan speckles on the near ground in the Falcon landing shot were seen before 0019;
@@ -99,4 +125,5 @@ Open GPU issues in the campaign (Winter Contingency):
   still open (a candidate is a value the game reads back from GPU-written memory).
   pixel shader replaced) instead of hanging the GPU again.
 - The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
-  `d3d12_render_target_cache.cc`) before Windows builds.
+  `d3d12_render_target_cache.cc`) before Windows builds, and its DXBC translator the W = 0
+  handling of 0021.
