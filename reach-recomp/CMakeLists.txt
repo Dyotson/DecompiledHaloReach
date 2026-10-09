@@ -16,6 +16,7 @@ set(REACH_SOURCES
     src/debug/frame_dump.cpp
     src/debug/gamestate_trace.cpp
     src/debug/texture_trace.cpp
+    src/hooks/offline_challenges.cpp
     src/hooks/switch_tailcalls.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/input_autopress.cpp

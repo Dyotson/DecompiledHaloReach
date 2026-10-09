@@ -188,6 +188,14 @@ Check exact param names in `endpoints.json` before calling.
   - Debug aids: `REACH_NETTRACE=1` (network calls and datagrams), `REACH_FPSLOG=1` (frame rate
     every 5 s), `REACH_XUID` / `REACH_GAMERTAG` (a second identity).
 
+- 2026-10-09 (late night): **System Link plays; challenges offline.**
+  - System Link: the XamEnumerate completion codes (a content enumeration retried forever and
+    blocked joins) and 360-style secure addresses (0.x.y.z) were the last blockers; two
+    instances join one lobby and play Firefight together (`docs/online_plan.md`).
+  - Daily/weekly challenges without Bungie's servers: picked from the date, shown in the
+    START menu, saved per profile (`docs/progression_re.md` 4.1). Progress counting in play
+    is not verified yet.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

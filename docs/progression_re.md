@@ -260,6 +260,44 @@ Award kinds [C]:
   - progress per controller at stride 8 inside each entry
 - **[C]** Progress is uploaded in `chpr`: daily id, weekly id, i32 progress[10] daily, i32 progress[10] weekly. `Challenges_LoadProgressChunk` 0x824E8CA8 restores it from a cached `chpr`.
 
+### 4.1 Offline challenges (implemented, 2026-10-09)
+
+`reach-recomp/src/hooks/offline_challenges.cpp` + `hints/offline_challenges.toml` (on by
+default, `REACH_OFFLINE_CHALLENGES=0` turns it off):
+
+- **Gates found:**
+  - The challenge sign-in listener (0x8373FAA8) attaches only profiles signed in to Live:
+    its filter 0x822D6958 returns flags bit 0. Hooked to accept local profiles (bit 1), so
+    the per-controller enable 0x8373FB10 gets set.
+  - "Rewards synced with the server" (rewards state == 2) is required by progress counting
+    (0x824BC85C), the new-challenges / seen-set path (0x824BBE60), the START menu's
+    CHALLENGES item (0x827C2E40) and the challenge list (0x82718F5C). All hooked to pass;
+    the rewards state itself and the cR blocks are untouched.
+- **Selection:** each rewards tick (`Rewards_UpdateController` entry 0x8258EB78), when the
+  day (reset 10:00 UTC, `REACH_CHALLENGE_RESET_UTC_HOUR`) or week (Tuesday) changed, a `dcha`
+  v3 chunk is built and passed to `Challenges_ApplyDchaChunk` 0x824BBF98 (r4 = chunk
+  header). Four dailies (one bounty, campaign, Firefight, multiplayer) and one weekly,
+  chosen from the date with splitmix64 among definitions that have a game mode and a cR
+  reward (the tags contain empty placeholders), preferring any-map ones. All entry
+  overrides are -1. Matchmaking-only definitions (def+0x31 == 2) get bit 0 ("counts
+  outside matchmaking") every tick.
+- **Persistence:** progress is saved to `<data>/reach/4D53085B/challenges_<xuid>.bin` and
+  restored after a restart through the game's own `chpr` path (0x8373FB19 + ctrl*100 and
+  the pending mask 0x8373FB18, applied by 0x824BCA08: max(local, saved), 0x7FFFFFFF =
+  completed without a second award).
+- **Verified:** the CHALLENGES item is enabled with a "new" star, the list shows the four
+  dailies and the weekly with names, descriptions, cR and progress bars; in a campaign
+  mission and a local Firefight game the active entries are marked applicable
+  (entry+0x10). **Not yet verified:** progress actually counting and a completion paying
+  out (scripted input could not get kills).
+- **Debug:** `REACH_CHALLENGE_DUMP=1` logs every definition; `REACH_CHALLENGE_PICK=
+  "cat:idx,...[;cat:idx]"` forces the picks. Forcing a non-weekly category into the weekly
+  set made the next map load fault endlessly (null read on the loader thread): the weekly
+  set must hold category 1 entries.
+- Definition fields (0x50): +0x14 target, +0x18 cR, +0x2C event mask, +0x30 modes (1
+  campaign, 2 Firefight, 4 multiplayer), +0x31 matchmaking bits (1 outside, 2 inside), +0x32
+  campaign difficulty mask, +0x34 map (0 = any), +0x40 parameter.
+
 ## 5. Armory purchase flow
 1. **[C]** UI: `UiArmory_OnItemSelected` 0x8278DF78. If the item is not owned:
    - `Armory_IsItemAvailable` 0x82110AD0 checks the requirements.

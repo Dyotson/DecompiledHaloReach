@@ -8,7 +8,7 @@ game_root = "../extracted/xbox360"
 [entrypoint]
 file_path = "../extracted/xbox360/default.xex"
 out_directory_path = "generated/default"
-includes = ["hints/indirect_entries.toml", "hints/indirect_entries_2.toml", "hints/indirect_entries_3.toml", "hints/rexcrt.toml", "hints/switch_tailcalls.toml", "hints/switch_tables.toml"]
+includes = ["hints/indirect_entries.toml", "hints/indirect_entries_2.toml", "hints/indirect_entries_3.toml", "hints/rexcrt.toml", "hints/switch_tailcalls.toml", "hints/switch_tables.toml", "hints/offline_challenges.toml"]
 
 [entrypoint.functions]
 # Vtable-referenced tail thunk (b 0x82931248) not discovered by the scanner.

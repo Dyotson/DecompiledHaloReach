@@ -1,0 +1,42 @@
+# Daily and weekly challenges without Bungie's servers (src/hooks/offline_challenges.cpp,
+# docs/progression_re.md section 4). The hooks run before the instruction at `address`.
+
+# Challenge sign-in filter (vtable[0] of the listener at 0x8373FAA8): it attaches only
+# profiles signed in to Live (flags bit 0). Let a local profile (bit 1) attach too.
+[[midasm_hook]]
+address = 0x822D6958
+name = "ReachChallengeSigninFilter"
+registers = ["r5"]
+
+# "Rewards synced with the server" tests (r6 = rewards state == 2) in progress counting
+# (0x824BC820) and in the new-challenges / seen-set path (0x824BBE30).
+[[midasm_hook]]
+address = 0x824BC85C
+name = "ReachChallengeSyncGate"
+registers = ["r6"]
+
+[[midasm_hook]]
+address = 0x824BBE60
+name = "ReachChallengeSyncGate"
+registers = ["r6"]
+
+# Entry of Rewards_UpdateController(ctrl): once per rewards tick per controller, on the
+# game thread, where the server's `dcha` would be applied.
+[[midasm_hook]]
+address = 0x8258EB78
+name = "ReachChallengeTick"
+registers = ["r3"]
+
+# The same "synced" test (sub_82217BD0) where the START menu enables its CHALLENGES item
+# (0x827C2D50) and where the challenge list screen fills itself (0x82718F28): override the
+# result right after the call. Its third caller, Player_BuildNetworkConfiguration, keeps
+# the real value.
+[[midasm_hook]]
+address = 0x827C2E40
+name = "ReachChallengeUiSynced"
+registers = ["r3"]
+
+[[midasm_hook]]
+address = 0x82718F5C
+name = "ReachChallengeUiSynced"
+registers = ["r3"]
