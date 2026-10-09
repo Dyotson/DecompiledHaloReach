@@ -1,7 +1,9 @@
 # P2P online: findings and plan
 
-Status (2026-10-09, night): M0, M1 and M2 done: two instances on one machine join the same
-System Link lobby. `reach-recomp/src/kernel/net.cpp`
+Status (2026-10-09, night): M0, M1 and M2 done, M3 started: two instances on one machine join
+the same System Link lobby and play a Firefight match together (Overlook, both players on the
+scoreboard, deaths seen by both, stable for minutes). Not yet tried: a full match to the
+postgame, host leaving / migration, Custom Games, more than two players, other machines. `reach-recomp/src/kernel/net.cpp`
 implements the virtual network described in section 4 behind `REACH_NET=1`. Two instances
 on one machine see each other, and one joins the other's lobby (both show "2/16" with both
 gamertags). `tools/system_link_pair.sh` sets this up.

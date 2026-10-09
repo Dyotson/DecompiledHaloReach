@@ -51,7 +51,7 @@ the game (see [Legal](#legal)).
 | Campaign (Winter Contingency) | Loads, plays the opening and reaches gameplay; rendering matches Xenia after 19 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); real occlusion queries, so the game no longer issues the water draw that hangs the GPU |
 | Progression (cR/rank/Armory) | Works offline: cR earned in play, rank-ups, Armory purchases saved in the profile, Spartan preview in the Armory and post-game screens ([`docs/progression_re.md`](docs/progression_re.md)); daily challenges need the "Omaha" service (phase 2) |
 | Forge | Works locally: editing on Sword Base, object placement, saving map variants |
-| Online P2P | System Link: two instances on one machine find each other (virtual network, `REACH_NET=1`); joining in progress ([`docs/online_plan.md`](docs/online_plan.md)) |
+| Online P2P | System Link works between two instances on one machine: join a lobby and play Firefight together (virtual network, `REACH_NET=1`, [`docs/online_plan.md`](docs/online_plan.md)); other machines and the internet are next |
 | File share | Not started |
 
 See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debugging recipes.
