@@ -19,7 +19,7 @@ set(REACH_SOURCES
     src/hooks/switch_tailcalls.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/input_autopress.cpp
-    src/kernel/net_trace.cpp
+    src/kernel/net.cpp
     src/kernel/xam_keyboard.cpp
     src/kernel/xam_signin.cpp
     src/kernel/xecrypt_rsa.cpp

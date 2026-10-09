@@ -1,7 +1,36 @@
 # P2P online: findings and plan
 
-Status: research only (2026-10-09). Nothing below is implemented yet. "Guess" marks
-statements not confirmed by code or a run.
+Status (2026-10-09, evening): M0 and M1 done, M2 partly. `reach-recomp/src/kernel/net.cpp`
+implements the virtual network described in section 4 behind `REACH_NET=1`. Two instances
+on one machine see each other: each lists the other's party under "System Link" with its
+gamertag, rank and player card, and offers "Join". Joining does not work yet (next section).
+"Guess" marks statements not confirmed by code or a run.
+
+## Progress log
+
+- **System Link froze the game.** Selecting it ran the network session state machine
+  `sub_82276B90`, whose 10-entry jump table codegen had recovered as one entry, so state 2+
+  hit `__builtin_trap()` forever. Fixed with `hints/switch_tables.toml`.
+- **Link status.** `XNetGetEthernetLinkStatus` returning a link makes "SYSTEM LINK GAMES"
+  appear in Network Mode.
+- **Ports.** Binding guest port 1000 fails on Linux (privileged). The virtual network never
+  binds guest ports on the host: each instance owns one UDP port in 21000-21007 and
+  multiplexes guest ports over it with an 8-byte header.
+- **XNetRandom.** The SDK fills 0xBB, so every instance generated the same session nonce and
+  dropped the other's discovery broadcasts as its own. Random bytes fixed discovery: each
+  instance answers the other's 13-byte `broadcast-search` with a 151/165-byte
+  `broadcast-reply`.
+- **Identity.** Every SDK profile is XUID 0xB13EBABEBABEBABE "User"; `REACH_XUID` and
+  `REACH_GAMERTAG` override them (`src/kernel/xam_signin.cpp`). A second instance needs its
+  own `XDG_DATA_HOME` too.
+- **Join (open).** Pressing X ("Join User") on the other party only calls `XNetRandom` (from
+  `sub_822C6050`, which queues a join request for the session at `this+0x5AEC0`) and sends
+  nothing: no `XNetRegisterKey`/`XNetConnect`, no VDP packet on port 1000, no XSession
+  message. Next: follow the queued request in `sub_822C6050`'s callee
+  (`*(this+0x5AEC0)->vtable[0x54]`) and the squad join states
+  (`_join_local_state_start_join_squad`, strings at 0x8204F428) to see what it waits for. A
+  guess: the joiner needs the host's session details from the broadcast reply (XNKID/XNKEY,
+  which our `XNetCreateKey` fills randomly but nobody registers).
 
 References used:
 

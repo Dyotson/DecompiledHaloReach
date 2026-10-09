@@ -28,6 +28,7 @@ Xenia Canary `82d0cd1f4`, the build we use as the reference.
 | 0019 | Defaults | `execute_unclipped_draw_vs_on_cpu` true, `readback_memexport` false, `gpu_allow_invalid_fetch_constants` true, as in Xenia. Without the first, a screen-space draw with clipping disabled was taken to use the whole EDRAM, so a depth buffer claimed the scene's tiles and the next ownership transfer replaced the lit scene with zeros | black 3D world in gameplay (HUD fine). **Fixed.** |
 | 0020 | VIZ queries | `PA_SC_VIZ_QUERY_STATUS` bits were set ("visible") at every VIZ_QUERY end and never cleared; Xenia leaves the register alone | none seen |
 | 0021 | SPIR-V vertex position | A vertex position with W = 0 is clipped on the host; on the Xenos X/W and Y/W go to infinity and a rectangle drawn with clipping disabled covers the target. Now W = 1 and X, Y = ±2^16 (Xenia has the same gap) | Spartan missing from the Armory preview and the post-game/PROMOTED screens. **Fixed.** |
+| 0022 | Vulkan occlusion queries | Host occlusion queries were switched off for good at the first query, because D3D's begin and end reports sit at different addresses and the SDK expected one; every query then returned the fake 1000 samples ("visible"). Reports are now snapshots of a running sample counter, as on the Xenos, written without waiting for the GPU: a guess (the query's last real result, zero included, as Xenia's "fast-alt") is rewritten with the real value when the GPU has finished | Reach issued its adaptive-tessellation water every frame (the draw that hangs the GPU) because the visibility test behind it always passed. **Fixed:** the draw is no longer issued in Forge or the campaign |
 
 `experimental/0014` (tessellated triangle strips/fans as lists) is not applied; see its
 README.
@@ -109,21 +110,22 @@ Open GPU issues in the campaign (Winter Contingency):
   ("Unsupported tessellation mode 0 for primitive type 6"); Xenia 82d0cd1 drops indexed ones
   too (it converts auto-indexed strips/fans only, see `experimental/0014`).
 - GPU hang (amdgpu `ring gfx timeout`, `VK_ERROR_DEVICE_LOST`) about 4 minutes into the
-  campaign as the Falcons take off. `RADV_DEBUG=hang` (report under `$HOME/radv_dumps_*`)
-  points at the first adaptive-tessellation draw (`kTrianglePatch`, 5142 float32 edge factors,
-  8-in-32, `VGT_HOS_MAX_TESS_LEVEL` 15; probably water): the very first one hangs, and
-  skipping those draws avoids the hang (the run then reaches gameplay). 0016 fixed the factor
-  decoding but not the hang. Hull shaders, domain-shader execution modes and register setup
-  (0017) now match Xenia; neither the domain nor the pixel shader has an unbounded loop (the
-  pixel shader's one guest loop is bounded by a loop constant). 0018 skips these draws by
-  default. Next: inspect the draw's inputs in a capture made just before it (or with the
-  Captures of Xenia at the same shots (Falcon takeoff, flight) contain **no** tessellated draw
-  and no 5142-index draw at all, and Xenia logs no failure for it: in Xenia the game never
-  issues these draws. They are not VIZ-predicated (token 0), the VIZ status register (0020)
-  and host occlusion queries don't change that, and Xenia runs with `occlusion_query_viz =
-  false`. So the game's own logic takes another path in our build; which input decides it is
-  still open (a candidate is a value the game reads back from GPU-written memory).
-  pixel shader replaced) instead of hanging the GPU again.
+  campaign as the Falcons take off, and on Sword Base in Forge: the first adaptive-tessellation
+  draw (`kTrianglePatch`, float32 edge factors, `VGT_HOS_MAX_TESS_LEVEL` 15; the water) hangs
+  RADV. 0016 fixed the factor decoding and 0017 the domain-shader setup, but the hang stays;
+  0018 skips these draws. **Why the game issues them at all (fixed by 0022):** in Xenia the
+  game issues the water pair (a 996-point memexport that computes the edge factors, VS
+  `E43930922B695042`, then the patch draw, VS `9ABC75772F0D46B1`) only in the first frames of
+  Sword Base and never at the Falcon shots; in our build it issued them every frame. The
+  difference was occlusion queries: the SDK disabled host queries at the first EVENT_WRITE_ZPD
+  pair (begin and end reports at different addresses), so every query answered "1000
+  samples". With real results (0022) the game stops issuing the water once its visibility
+  query reports zero: no water draw in 6 minutes of Forge on Sword Base or through the campaign's Falcon takeoff and
+  first gameplay, at 30 fps. A
+  blocking first version (waiting for each query) cost a third of the frame rate (18.5 fps in
+  Forge); guessing "visible" while waiting (Xenia's default "fast") let the water through
+  every other frame, because Reach reads a result before the GPU has produced it. The hang
+  itself is unsolved, so 0018 stays on for the frames where the game does issue the draw.
 - The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
   `d3d12_render_target_cache.cc`) before Windows builds, and its DXBC translator the W = 0
   handling of 0021.

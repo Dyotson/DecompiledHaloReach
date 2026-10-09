@@ -173,6 +173,21 @@ Check exact param names in `endpoints.json` before calling.
       reproduce on the next run.
     - D-pad DOWN is sometimes ignored in menus during FIFO sessions (UP works; menus wrap).
 
+- 2026-10-09 (night): **no more water draws; System Link discovery works.**
+  - SDK patch 0022: real occlusion query results, without stalling the GPU. The SDK had
+    switched host queries off at the first query and answered "visible" to all of them, so
+    Reach kept issuing its adaptive-tessellation water every frame (the draw that hangs RADV).
+    Now Forge (6 minutes on Sword Base) and the campaign through the Falcon takeoff run at
+    30 fps with no water draw issued (patch 0018 still skips it if it comes). Note: the title
+    and main menus remember their last selection in the profile, so the default
+    `run_reach.sh` presses can land in Forge instead of the campaign. Trace in `docs/sdk_patches.md`.
+  - System Link: a codegen jump-table gap froze the game when System Link was selected
+    (`hints/switch_tables.toml`). `src/kernel/net.cpp` adds a virtual network
+    (`REACH_NET=1`); two instances on one machine list each other's parties. Joining is the
+    next step (`docs/online_plan.md`).
+  - Debug aids: `REACH_NETTRACE=1` (network calls and datagrams), `REACH_FPSLOG=1` (frame rate
+    every 5 s), `REACH_XUID` / `REACH_GAMERTAG` (a second identity).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
@@ -197,6 +212,10 @@ Check exact param names in `endpoints.json` before calling.
   has stopped presenting.
 - `qrenderdoc --python` crashes with "Illegal instruction" under `QT_QPA_PLATFORM=offscreen`;
   run it without that variable.
+- Two instances on one machine (System Link tests): give the second its own `XDG_DATA_HOME`,
+  `REACH_XUID`/`REACH_GAMERTAG`, FIFO, dump directory and `--log_file`; start both with
+  `REACH_NET=1`. Each takes about 6 GB of RAM and 5 GB of `/dev/shm`. Keep `REACH_NETTRACE`
+  off for long runs: it logs gigabytes into RAM-backed `/tmp`.
 - Frame dumps without screenshots: `REACH_FRAMEDUMP=20,28` + `--vulkan_readback_resolve=true`, then
   `tools/frame_to_png.py`. Texture binding trace: `REACH_TEXTRACE=1`. Live guest memory: `tools/guestmem.py`.
   `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.

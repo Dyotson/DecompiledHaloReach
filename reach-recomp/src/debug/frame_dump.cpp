@@ -10,6 +10,8 @@
 // REACH_FRAMEDUMP_TRIGGER=<path> also dumps a frame whenever that file appears
 // (it is deleted again), for stepping through menus with REACH_AUTOPRESS_FIFO.
 //
+// REACH_FPSLOG=1 logs the guest frame rate (VdSwap calls) every 5 seconds.
+//
 // REACH_INVALIDATE_AT="20" fires the physical-memory write callbacks over the
 // whole 0xA0000000 mirror once at that time, forcing the GPU to drop and
 // re-upload every watched texture (diagnoses stale GPU texture copies).
@@ -199,6 +201,20 @@ extern "C" REX_FUNC(__imp__VdSwap) {
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
   MaybeTriggerRenderDocCapture(elapsed);
   MaybeInvalidatePhysicalMemory(elapsed);
+  static const bool fps_log = [] {
+    const char* v = std::getenv("REACH_FPSLOG");
+    return v && *v && *v != '0';
+  }();
+  if (fps_log) {
+    static double window_start = elapsed;
+    static uint32_t swaps = 0;
+    ++swaps;
+    if (elapsed - window_start >= 5.0) {
+      REXLOG_INFO("REACH_FPSLOG: t={:.0f}s {:.1f} fps", elapsed, swaps / (elapsed - window_start));
+      window_start = elapsed;
+      swaps = 0;
+    }
+  }
   Schedule& schedule = GetSchedule();
   static const char* dump_trigger = std::getenv("REACH_FRAMEDUMP_TRIGGER");
   static int dump_polls = 0;
