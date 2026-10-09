@@ -1,0 +1,23 @@
+diff --git a/src/graphics/vulkan/texture_cache.cpp b/src/graphics/vulkan/texture_cache.cpp
+--- a/src/graphics/vulkan/texture_cache.cpp
++++ b/src/graphics/vulkan/texture_cache.cpp
+@@ -1739,6 +1739,19 @@
+         vulkan_texture.image(), ui::vulkan::util::InitializeSubresourceRange(),
+         texture_src_stage_mask, texture_dst_stage_mask, texture_src_access_mask,
+         texture_dst_access_mask, texture_old_layout, texture_new_layout);
++  } else {
++    // Same layout/usage, but another upload may have written the image earlier
++    // (for instance, the texture was reloaded after another resolve without
++    // being sampled in between) - emit a TRANSFER_WRITE -> TRANSFER_WRITE
++    // barrier so the next CmdCopyBufferToImage is ordered after the prior copy.
++    // The source and destination masks are equal, so it must not be skipped as
++    // a no-op (as in Xenia).
++    command_processor_.PushImageMemoryBarrier(
++        vulkan_texture.image(), ui::vulkan::util::InitializeSubresourceRange(),
++        VK_PIPELINE_STAGE_TRANSFER_BIT, VK_PIPELINE_STAGE_TRANSFER_BIT,
++        VK_ACCESS_TRANSFER_WRITE_BIT, VK_ACCESS_TRANSFER_WRITE_BIT,
++        VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL, VK_IMAGE_LAYOUT_TRANSFER_DST_OPTIMAL,
++        VK_QUEUE_FAMILY_IGNORED, VK_QUEUE_FAMILY_IGNORED, false);
+   }
+   command_processor_.SubmitBarriers(true);
+   VkBufferImageCopy* copy_regions = command_buffer.CmdCopyBufferToImageEmplace(

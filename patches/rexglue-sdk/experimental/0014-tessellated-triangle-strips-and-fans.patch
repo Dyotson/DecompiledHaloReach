@@ -1,0 +1,151 @@
+diff --git a/include/rex/graphics/primitive_processor.h b/include/rex/graphics/primitive_processor.h
+--- a/include/rex/graphics/primitive_processor.h
++++ b/include/rex/graphics/primitive_processor.h
+@@ -511,6 +511,27 @@
+     }
+   }
+ 
++  // Triangle strips as triangle lists, keeping the winding of every other
++  // triangle: (v0, v1, v2), (v2, v1, v3), (v2, v3, v4)... as in Direct3D. Only
++  // needed for tessellation, where the host draws patches from lists.
++  static constexpr uint32_t GetTriangleStripListIndexCount(uint32_t strip_index_count) {
++    return strip_index_count > 2 ? (strip_index_count - 2) * 3 : 0;
++  }
++  template <typename Index, typename IndexTransform>
++  static void TriangleStripToList(Index* dest, const Index* source, uint32_t source_index_count,
++                                  const IndexTransform& index_transform) {
++    for (uint32_t i = 2; i < source_index_count; ++i) {
++      Index a = index_transform(source[i - 2]);
++      Index b = index_transform(source[i - 1]);
++      if (i & 1) {
++        std::swap(a, b);
++      }
++      *(dest++) = a;
++      *(dest++) = b;
++      *(dest++) = index_transform(source[i]);
++    }
++  }
++
+   static constexpr uint32_t GetLineLoopStripIndexCount(uint32_t loop_index_count) {
+     // Even if 2 vertices are supplied, two lines are still drawn between them.
+     // https://www.khronos.org/opengl/wiki/Primitive
+@@ -599,6 +620,14 @@
+              ++range_it) {
+           TriangleFanToList(dest_write_ptr, source + range_it->guest_offset,
+                             range_it->guest_index_count, index_transform);
++          dest_write_ptr += range_it->host_index_count;
++        }
++        break;
++      case xenos::PrimitiveType::kTriangleStrip:
++        for (PrimitiveRangeIterator range_it = ranges_beginning; range_it != ranges_end;
++             ++range_it) {
++          TriangleStripToList(dest_write_ptr, source + range_it->guest_offset,
++                              range_it->guest_index_count, index_transform);
+           dest_write_ptr += range_it->host_index_count;
+         }
+         break;
+diff --git a/src/graphics/primitive_processor.cpp b/src/graphics/primitive_processor.cpp
+--- a/src/graphics/primitive_processor.cpp
++++ b/src/graphics/primitive_processor.cpp
+@@ -295,17 +295,20 @@
+   xenos::TessellationMode tessellation_mode = regs.Get<reg::VGT_HOS_CNTL>().tess_mode;
+   Shader::HostVertexShaderType host_vertex_shader_type;
+   if (tessellation_enabled) {
+-    // Currently only supporting tessellation in known cases for safety, and not
+-    // yet converting patch strips / fans to patch lists until games using them
+-    // are found for easier debugging when it actually happens.
+-    // TODO(Triang3l): Conversion of patch strips / fans if found.
++    // Currently only supporting tessellation in known cases for safety.
+     host_vertex_shader_type = Shader::HostVertexShaderType(-1);
+     switch (guest_primitive_type) {
+       case xenos::PrimitiveType::kTriangleList:
++      case xenos::PrimitiveType::kTriangleFan:
++      case xenos::PrimitiveType::kTriangleStrip:
+         // Also supported by triangle strips and fans according to:
+         // https://www.khronos.org/registry/OpenGL/extensions/AMD/AMD_vertex_shader_tessellator.txt
+-        // Would need to convert those to triangle lists, but haven't seen any
+-        // games using tessellated strips / fans so far.
++        // Convert strips and fans to triangle lists for tessellation (as in
++        // Xenia). 4D53085B (Halo: Reach) draws indexed discrete-tessellated
++        // triangle strips in its campaign.
++        if (guest_primitive_type != xenos::PrimitiveType::kTriangleList) {
++          host_primitive_type = xenos::PrimitiveType::kTriangleList;
++        }
+         switch (tessellation_mode) {
+           case xenos::TessellationMode::kDiscrete:
+             // - 415607E1 - nets above barrels in the beginning of the first
+@@ -510,9 +513,52 @@
+           assert_true(host_primitive_type == xenos::PrimitiveType::kTriangleList);
+           cacheable.host_draw_vertex_count =
+               GetTriangleFanListIndexCount(cacheable.host_draw_vertex_count);
+-          cacheable.index_buffer_type = ProcessedIndexBufferType::kHostBuiltinForAuto;
+-          assert_true(builtin_ib_offset_triangle_fans_to_lists_ != SIZE_MAX);
+-          cacheable.host_index_buffer_handle = builtin_ib_offset_triangle_fans_to_lists_;
++          if (builtin_ib_offset_triangle_fans_to_lists_ != SIZE_MAX) {
++            cacheable.index_buffer_type = ProcessedIndexBufferType::kHostBuiltinForAuto;
++            cacheable.host_index_buffer_handle = builtin_ib_offset_triangle_fans_to_lists_;
++          } else if (cacheable.host_draw_vertex_count) {
++            // No prebuilt fan to list index buffer - only reached via the
++            // tessellation path, which forces a triangle list host topology.
++            cacheable.index_buffer_type = ProcessedIndexBufferType::kHostConverted;
++            auto host_indices = reinterpret_cast<uint16_t*>(
++                RequestHostConvertedIndexBufferForCurrentFrame(
++                    xenos::IndexFormat::kInt16, cacheable.host_draw_vertex_count, false, 0,
++                    cacheable.host_index_buffer_handle));
++            if (!host_indices) {
++              return false;
++            }
++            for (uint32_t i = 2; i < guest_draw_vertex_count; ++i) {
++              *(host_indices++) = uint16_t(i - 1);
++              *(host_indices++) = uint16_t(i);
++              *(host_indices++) = 0;
++            }
++          }
++          break;
++        case xenos::PrimitiveType::kTriangleStrip:
++          // Only reached via the tessellation path, which forces a triangle
++          // list host topology.
++          assert_true(host_primitive_type == xenos::PrimitiveType::kTriangleList);
++          cacheable.host_draw_vertex_count =
++              GetTriangleStripListIndexCount(cacheable.host_draw_vertex_count);
++          if (cacheable.host_draw_vertex_count) {
++            cacheable.index_buffer_type = ProcessedIndexBufferType::kHostConverted;
++            auto host_indices = reinterpret_cast<uint16_t*>(
++                RequestHostConvertedIndexBufferForCurrentFrame(
++                    xenos::IndexFormat::kInt16, cacheable.host_draw_vertex_count, false, 0,
++                    cacheable.host_index_buffer_handle));
++            if (!host_indices) {
++              return false;
++            }
++            for (uint32_t i = 2; i < guest_draw_vertex_count; ++i) {
++              uint16_t a = uint16_t(i - 2), b = uint16_t(i - 1);
++              if (i & 1) {
++                std::swap(a, b);
++              }
++              *(host_indices++) = a;
++              *(host_indices++) = b;
++              *(host_indices++) = uint16_t(i);
++            }
++          }
+           break;
+         case xenos::PrimitiveType::kLineLoop:
+           // Plus 1 element (if there's anything to draw) in the strip, still
+@@ -651,6 +697,10 @@
+         switch (guest_primitive_type) {
+           case xenos::PrimitiveType::kTriangleFan:
+             host_index_count_getter = GetTriangleFanListIndexCount;
++            break;
++          case xenos::PrimitiveType::kTriangleStrip:
++            // Only converted for tessellation.
++            host_index_count_getter = GetTriangleStripListIndexCount;
+             break;
+           case xenos::PrimitiveType::kLineLoop:
+             host_index_count_getter = GetLineLoopStripIndexCount;
+@@ -1230,6 +1280,7 @@
+       const PassthroughIndexTransform& index_transform);                   \
+   XE_GPU_PRIMITIVE_PROCESSOR_INSTANTIATE_CONVERSION_NO_PASSTHROUGH(ConverterName)
+ XE_GPU_PRIMITIVE_PROCESSOR_INSTANTIATE_CONVERSION(TriangleFanToList)
++XE_GPU_PRIMITIVE_PROCESSOR_INSTANTIATE_CONVERSION(TriangleStripToList)
+ XE_GPU_PRIMITIVE_PROCESSOR_INSTANTIATE_CONVERSION_NO_PASSTHROUGH(LineLoopToStrip)
+ // TODO(Triang3l): SIMD quad conversion maybe - 2 vectors to 3 vectors (though
+ // multiple quads are rarely drawn anyway).

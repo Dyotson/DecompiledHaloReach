@@ -104,6 +104,17 @@ Check exact param names in `endpoints.json` before calling.
   for that: ydotool's absolute moves land at (0,0) on this KDE session and hit other windows.
   `renderdoccmd capture` under `timeout` leaves the captured child running; kill it afterwards.
 
+- 2026-10-09 (night): **checkpoint revert crash fixed.** ~4.5 min into the campaign the game reverted
+  to a checkpoint and died with "Call to invalid or unregistered function at 0x82429440": a
+  post-revert callback (table 0x82A39BF0) is a real function placed right after a call to the
+  no-return fatal-error handler, so codegen merged it into its predecessor. `find_missing_entries.py`
+  now also accepts data-referenced addresses after a `bl` (and skips `.reloc`);
+  `hints/indirect_entries_2.toml` adds 18 such entries. `REACH_GSTRACE=1`
+  (`src/debug/gamestate_trace.cpp`) traces game state save/load/verify. Nine more SDK GPU patches
+  (0005-0013, from an audit against Xenia; see `docs/sdk_patches.md`). Open: red terrain patches,
+  dropped tessellated strips, GPU hang ~5 min in. `REACH_AUTOPRESS` now drives sticks and triggers
+  (`300:LSUP:4`, `RT`).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

@@ -14,6 +14,7 @@ include(generated/rexglue.cmake)
 set(REACH_SOURCES
     src/main.cpp
     src/debug/frame_dump.cpp
+    src/debug/gamestate_trace.cpp
     src/debug/texture_trace.cpp
     src/hooks/switch_tailcalls.cpp
     src/kernel/file_delete_on_close.cpp

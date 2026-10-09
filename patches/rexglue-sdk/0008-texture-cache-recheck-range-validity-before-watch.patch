@@ -1,0 +1,116 @@
+diff --git a/include/rex/graphics/shared_memory.h b/include/rex/graphics/shared_memory.h
+--- a/include/rex/graphics/shared_memory.h
++++ b/include/rex/graphics/shared_memory.h
+@@ -78,6 +78,10 @@
+   // the range has been fully updated and is usable.
+   bool RequestRanges(const std::pair<uint32_t, uint32_t>* ranges, size_t count);
+   bool RequestRange(uint32_t start, uint32_t length);
++  // Returns whether every page in the range is currently valid in the host GPU
++  // memory copy. Hold the global critical region if relying on this for state
++  // transitions such as watch installation.
++  bool IsRangeValid(uint32_t start, uint32_t length) const;
+ 
+   // Marks the range and, if not exact_range, potentially its surroundings
+   // (to up to the first GPU-written page, as an access violation exception
+diff --git a/src/graphics/shared_memory.cpp b/src/graphics/shared_memory.cpp
+--- a/src/graphics/shared_memory.cpp
++++ b/src/graphics/shared_memory.cpp
+@@ -473,6 +473,34 @@
+   return RequestRanges(&range, 1);
+ }
+ 
++bool SharedMemory::IsRangeValid(uint32_t start, uint32_t length) const {
++  if (!length) {
++    return true;
++  }
++  if (start > kBufferSize || (kBufferSize - start) < length) {
++    return false;
++  }
++
++  const uint32_t page_first = start >> page_size_log2_;
++  const uint32_t page_last = (start + length - 1) >> page_size_log2_;
++  const uint32_t block_first = page_first >> 6;
++  const uint32_t block_last = page_last >> 6;
++
++  for (uint32_t i = block_first; i <= block_last; ++i) {
++    uint64_t valid_mask = UINT64_MAX;
++    if (i == block_first) {
++      valid_mask &= ~((uint64_t(1) << (page_first & 63)) - 1);
++    }
++    if (i == block_last && (page_last & 63) != 63) {
++      valid_mask &= (uint64_t(1) << ((page_last & 63) + 1)) - 1;
++    }
++    if ((system_page_flags_valid_[i] & valid_mask) != valid_mask) {
++      return false;
++    }
++  }
++  return true;
++}
++
+ std::pair<uint32_t, uint32_t> SharedMemory::MemoryInvalidationCallbackThunk(
+     void* context_ptr, uint32_t physical_address_start, uint32_t length, bool exact_range) {
+   return reinterpret_cast<SharedMemory*>(context_ptr)
+diff --git a/include/rex/graphics/pipeline/texture/cache.h b/include/rex/graphics/pipeline/texture/cache.h
+--- a/include/rex/graphics/pipeline/texture/cache.h
++++ b/include/rex/graphics/pipeline/texture/cache.h
+@@ -226,7 +226,9 @@
+     bool mips_outdated(const std::unique_lock<std::recursive_mutex>& global_lock) const {
+       return mips_outdated_;
+     }
+-    void MakeUpToDateAndWatch(const std::unique_lock<std::recursive_mutex>& global_lock);
++    // Returns false (keeping the texture outdated) if the guest memory backing
++    // the outdated parts has been invalidated again since it was requested.
++    bool MakeUpToDateAndWatch(const std::unique_lock<std::recursive_mutex>& global_lock);
+ 
+     void WatchCallback(const std::unique_lock<std::recursive_mutex>& global_lock, bool is_mip);
+ 
+diff --git a/src/graphics/pipeline/texture/cache.cpp b/src/graphics/pipeline/texture/cache.cpp
+--- a/src/graphics/pipeline/texture/cache.cpp
++++ b/src/graphics/pipeline/texture/cache.cpp
+@@ -444,7 +444,11 @@
+   // resolves as well to detect when the CPU wants to reuse the memory for a
+   // regular texture or a vertex buffer, and thus the scaled resolve version is
+   // not up to date anymore.
+-  texture.MakeUpToDateAndWatch(global_critical_region_.Acquire());
++  if (!texture.MakeUpToDateAndWatch(global_critical_region_.Acquire())) {
++    // Invalidated again while loading - keep outdated and retry on next use.
++    texture_became_outdated_.store(true, std::memory_order_release);
++    return false;
++  }
+   texture.LogAction("Loaded");
+ 
+   return true;
+@@ -686,9 +690,24 @@
+   texture_cache_.UpdateTexturesTotalHostMemoryUsage(0, host_memory_usage_);
+ }
+ 
+-void TextureCache::Texture::MakeUpToDateAndWatch(
++bool TextureCache::Texture::MakeUpToDateAndWatch(
+     const std::unique_lock<std::recursive_mutex>& global_lock) {
+   SharedMemory& shared_memory = texture_cache().shared_memory();
++  assert_true(global_lock.owns_lock());
++  // If the guest memory has been invalidated (by the CPU) between requesting
++  // the range from the shared memory and installing the watch here, the loaded
++  // data may be stale, and no watch callback will be invoked for that
++  // invalidation - keep the texture outdated so it's reloaded (as in Xenia).
++  if (base_outdated_ &&
++      !shared_memory.IsRangeValid(key().base_page << 12,
++                                  rex::align(GetGuestBaseSize(), UINT32_C(16)))) {
++    return false;
++  }
++  if (mips_outdated_ &&
++      !shared_memory.IsRangeValid(key().mip_page << 12,
++                                  rex::align(GetGuestMipsSize(), UINT32_C(16)))) {
++    return false;
++  }
+   if (base_outdated_) {
+     assert_not_zero(GetGuestBaseSize());
+     base_outdated_ = false;
+@@ -703,6 +722,7 @@
+         key().mip_page << 12, GetGuestMipsSize(), TextureCache::WatchCallback, this, nullptr, 1);
+     outdated_mask_.fetch_and(~kOutdatedBitMips, std::memory_order_release);
+   }
++  return true;
+ }
+ 
+ void TextureCache::Texture::MarkAsUsed() {
