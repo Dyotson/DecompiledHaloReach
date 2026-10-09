@@ -7,12 +7,20 @@
 // LSRIGHT RSUP RSDOWN RSLEFT RSRIGHT. Triggers: LT RT. When the variable is
 // unset the hook only forwards to the SDK implementation. Input is applied to
 // user 0 even if no physical controller is connected.
+//
+// REACH_AUTOPRESS_FIFO=<path> also reads "INPUT[:hold]" lines from that FIFO
+// (create it with mkfifo) while the game runs and presses each one as it
+// arrives, so menus can be stepped through while watching frame dumps
+// (REACH_FRAMEDUMP_TRIGGER). In either mode the game sees a connected, centred
+// controller between presses instead of a disconnected one.
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
 #include <dlfcn.h>
+#include <fcntl.h>
+#include <unistd.h>
 
 #include <chrono>
 #include <cstdint>
@@ -20,6 +28,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -102,6 +111,36 @@ std::vector<Press> ParseSchedule(const char* spec) {
   return presses;
 }
 
+std::mutex schedule_mutex;
+
+// Reads "INPUT[:hold]" lines from the FIFO and schedules each one right away.
+void ReadFifo(std::string path, std::vector<Press>* schedule,
+              std::chrono::steady_clock::time_point start) {
+  // O_RDWR keeps the FIFO open (no EOF) when the writer goes away.
+  int fd = open(path.c_str(), O_RDWR);
+  if (fd < 0) {
+    REXLOG_WARN("REACH_AUTOPRESS_FIFO: cannot open {}", path);
+    return;
+  }
+  std::string line;
+  char c;
+  while (read(fd, &c, 1) == 1) {
+    if (c != '\n') {
+      line += c;
+      continue;
+    }
+    double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
+    std::vector<Press> parsed = ParseSchedule(("0:" + line).c_str());
+    for (Press& press : parsed) {
+      press.at_seconds = now;
+      std::lock_guard<std::mutex> lock(schedule_mutex);
+      schedule->push_back(press);
+    }
+    REXLOG_INFO("REACH_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
+    line.clear();
+  }
+}
+
 GuestFunc SdkGetState() {
   static GuestFunc fn = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__XamInputGetState"));
   return fn;
@@ -116,11 +155,17 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
   static std::vector<Press> schedule;
   static std::chrono::steady_clock::time_point start;
   static uint32_t packet = 0;
+  static bool scripted = false;
   std::call_once(once, [] {
     start = std::chrono::steady_clock::now();
     if (const char* spec = std::getenv("REACH_AUTOPRESS")) {
       schedule = ParseSchedule(spec);
+      scripted = !schedule.empty();
       REXLOG_INFO("REACH_AUTOPRESS: {} scheduled presses", schedule.size());
+    }
+    if (const char* fifo = std::getenv("REACH_AUTOPRESS_FIFO"); fifo && *fifo) {
+      scripted = true;
+      std::thread(ReadFifo, std::string(fifo), &schedule, start).detach();
     }
   });
 
@@ -129,13 +174,14 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
   if (GuestFunc sdk = SdkGetState()) {
     sdk(ctx, base);
   }
-  if (schedule.empty() || user_index != 0 || state_addr == 0) return;
+  if (!scripted || user_index != 0 || state_addr == 0) return;
 
   double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
   uint16_t injected = 0;
   int16_t sticks[4] = {};
   uint8_t triggers[2] = {};
   bool any = false;
+  std::lock_guard<std::mutex> lock(schedule_mutex);
   for (const Press& p : schedule) {
     if (now < p.at_seconds || now >= p.at_seconds + p.hold_seconds) continue;
     any = true;
@@ -147,14 +193,14 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
       if (p.triggers[i]) triggers[i] = p.triggers[i];
     }
   }
-  if (!any) return;
-
   uint8_t* state = base + state_addr;
   if (ctx.r3.u32 != kErrorSuccess) {
-    // No physical pad: present a connected, centred one.
+    // No physical pad: present a connected, centred one, also between presses
+    // (a disconnected pad pauses gameplay).
     std::memset(state, 0, 16);
     ctx.r3.u64 = kErrorSuccess;
   }
+  if (!any) return;
   uint16_t buttons;
   std::memcpy(&buttons, state + 4, 2);
   buttons = __builtin_bswap16(static_cast<uint16_t>(__builtin_bswap16(buttons) | injected));

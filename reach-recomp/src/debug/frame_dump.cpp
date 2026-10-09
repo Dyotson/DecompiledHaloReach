@@ -7,6 +7,9 @@
 // resolves are written back to guest memory; otherwise the dump shows whatever
 // the CPU last wrote there.
 //
+// REACH_FRAMEDUMP_TRIGGER=<path> also dumps a frame whenever that file appears
+// (it is deleted again), for stepping through menus with REACH_AUTOPRESS_FIFO.
+//
 // REACH_INVALIDATE_AT="20" fires the physical-memory write callbacks over the
 // whole 0xA0000000 mirror once at that time, forcing the GPU to drop and
 // re-upload every watched texture (diagnoses stale GPU texture copies).
@@ -197,6 +200,12 @@ extern "C" REX_FUNC(__imp__VdSwap) {
   MaybeTriggerRenderDocCapture(elapsed);
   MaybeInvalidatePhysicalMemory(elapsed);
   Schedule& schedule = GetSchedule();
+  static const char* dump_trigger = std::getenv("REACH_FRAMEDUMP_TRIGGER");
+  static int dump_polls = 0;
+  if (dump_trigger && *dump_trigger && fetch_addr && ++dump_polls % 10 == 0 &&
+      std::remove(dump_trigger) == 0) {
+    DumpFrontBuffer(base, fetch_addr, elapsed, schedule.dir);
+  }
   if (schedule.next < schedule.times.size() && fetch_addr) {
     double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
     if (now >= schedule.times[schedule.next]) {
