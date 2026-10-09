@@ -23,16 +23,18 @@ gamertag, rank and player card, and offers "Join". Joining does not work yet (ne
 - **Identity.** Every SDK profile is XUID 0xB13EBABEBABEBABE "User"; `REACH_XUID` and
   `REACH_GAMERTAG` override them (`src/kernel/xam_signin.cpp`). A second instance needs its
   own `XDG_DATA_HOME` too.
-- **Join (open).** Pressing X ("Join User") on the other party, from the main menu or from a
-  lobby, calls `sub_826EA770` → `sub_822C6050`. Because the session field `+0x188` is 1, it
-  takes the deferred path: it stores a join record at 0x832FAD00 (nonce from `sub_82273CB8`,
-  zero, XNKID, XNKEY, the target's XNADDR at +0x24, then a type byte) instead of calling the
-  join-request method at `session+0x5AEC0` (vtable +0x54). The record is right (the XNADDR is
-  the host's, 127.0.0.1 plus the host's port), but hardware read watchpoints show nothing
-  reading it afterwards, no XNet key/connect call follows and no VDP packet is sent; later
-  presses do not reach `sub_822C6050` again. Next: find what consumes the record (or why the
-  immediate path is not taken), e.g. what `+0x188` means and what `sub_826EB598` /
-  `sub_8226C228` (called around the join depending on `FUN_8222a810()`) do.
+- **Join.** X ("Join User") stores a deferred join record (`sub_822C6050`, record at
+  0x832FAD00), which the per-frame network join update `sub_82200A00` picks up. That update
+  was skipped forever: the SDK completes an asynchronous `XamEnumerate` that has run out of
+  items with the raw error, while the console (and Xenia) completes it with
+  ERROR_FUNCTION_FAILED plus the error as an HRESULT in the extended error. Reach's content
+  enumeration accepted only the console's form, so it restarted about five times a second
+  and kept a "content operation in flight" flag up (byte 0x8391DEB8), which gates the join
+  update. `src/kernel/xam_enumerate.cpp` fixes the completion codes. Now the joiner registers
+  the host's key, resolves its address, waits 8 s without sending anything but discovery,
+  then sends join-abort (out-of-band message 10) to the host's port 1001, which answers
+  join-refuse (11); the UI says "UNABLE TO JOIN: incompatible network setup". Open: what the
+  joiner waits for before sending join-request.
 - **Discovery packets** are Blam bitstreams: a 13-byte `broadcast-search` (type byte, a
   constant, 8-byte nonce) and a 151-169-byte `broadcast-reply` echoing the nonce and carrying,
   bit-packed, the host's XNADDR, the game mode name in UTF-16 and the host's XUID.
