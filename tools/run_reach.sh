@@ -15,6 +15,13 @@ shift || true
 cd "$ROOT/reach-recomp/out/build/${REACH_BUILD:-linux-nightly}"
 [ -f /tmp/reach_run.log ] && mv -f /tmp/reach_run.log /tmp/reach_run.prev.log
 export REACH_AUTOPRESS="${REACH_AUTOPRESS-9:START}"
+# Scripted input is injected for user 0. A connected pad (also Steam Input's or
+# Sunshine's virtual ones) makes the menus behave differently and the scripted
+# presses stop reaching the campaign, so SDL ignores every pad in scripted runs.
+if [ -n "$REACH_AUTOPRESS" ]; then
+    export SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT="${SDL_GAMECONTROLLER_IGNORE_DEVICES_EXCEPT-0x0000/0x0000}"
+    export SDL_JOYSTICK_IGNORE_DEVICES_EXCEPT="${SDL_JOYSTICK_IGNORE_DEVICES_EXCEPT-0x0000/0x0000}"
+fi
 DEFAULT_SDK="$HOME/rexglue-sdk-patched/0.10.0.24/linux-amd64"
 [ -d "$DEFAULT_SDK/lib" ] || DEFAULT_SDK="$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64"
 export LD_LIBRARY_PATH="${REXSDK:-$DEFAULT_SDK}/lib:$PWD"

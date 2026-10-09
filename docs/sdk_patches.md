@@ -21,6 +21,7 @@ Xenia Canary `82d0cd1f4`, the build we use as the reference.
 | 0009 | Shader translator | Scalar ALU operand ignored the Z component when paired with a 3-source vector op (Xenia 92ada8ebc0) | wrong shader math |
 | 0011 | Resolve clears | 64bpp clear value halves swapped (Xenia 16e1eb8e28) | 16_16_16_16 / 32_32 clears in wrong colors |
 | 0013 | Draw filtering | Draws with `kill_pix_post_hi_z` but no VIZ query were rasterized (Xenia draw_util) | proxy geometry drawn into targets |
+| 0015 | Vulkan RT transfer | Raw gamma bytes decoded to the lower edge of their linear range before being stored in the R16G16B16A16_UNORM gamma target; UNORM16 rounding then re-encodes some bytes one lower (Xenia decodes to the midpoint, `GammaByteToLinearMidpoint`) | red/green speckled terrain, foliage and stars in the campaign. **Fixed.** |
 
 `experimental/0014` (tessellated triangle strips/fans as lists) is not applied; see its
 README.
@@ -31,14 +32,42 @@ for near-identical statements with one token changed; then list Xenia commits af
 fork point that touch the same files and check which the SDK has. RenderDoc scripts for
 confirming a suspect on a live capture are in `tools/renderdoc/`.
 
+## The red terrain (fixed by 0015)
+
+Reach draws its alpha-tested and forward-lit surfaces (foliage, terrain detail, stars) into
+the light buffer as `k_2_10_10_10_FLOAT` (7e3, three exponent and seven mantissa bits per
+channel), re-aliases those EDRAM tiles as `k_8_8_8_8_GAMMA` and then as `k_8_8_8_8`, and
+resolves them to 0x02354000. A full-screen "combine" pass reads that memory as
+`k_2_10_10_10_AS_16_16_16_16` with an exponent bias of +3 and decodes the 7e3 bits by hand
+(`floor`/`fract`/`exp2`). The bits only survive if every host-side conversion along the way is
+exact. Our gamma render targets are stored as linear R16G16B16A16_UNORM: the transfer decoded
+each gamma byte to the exact lower edge of its linear range (e.g. 72/1023), UNORM16 storage
+rounded some of those just below the edge, and the truncating re-encode in the EDRAM dump
+returned the byte minus one. Because the 10-bit fields straddle bytes, one LSB in byte 1 moved
+the top bits of red from 68 to 835, which the combine decodes as 2^6: bright red. Xenia
+decodes to the midpoint of the range, which survives the round trip; 0015 ports that.
+
+Found by capturing the same cinematic shot in Xenia (profile copied into its content folder,
+virtual pad, `trigger_capture.py`) and in our build (`REACH_RDCAPTURE_TRIGGER`), then
+`resolves.py` (identical resolve sequences), `pick.py` on the combine draw's inputs at matching
+foliage pixels (Xenia: small 7e3 values; ours: R field 835), `phist.py` to follow one pixel's
+bytes back to the ownership transfer, and recomputing the expected bytes by hand.
+
+Wrong turns worth knowing about: the combine pass writes garbage-red for every pixel that
+does not hold 7e3 data in Xenia too; later material draws (blending off) overwrite it, so a
+red combine output alone is not a bug. Xenia 82d0cd1 converts only auto-indexed tessellated
+triangle strips/fans to lists; indexed ones still hit `default: return false` there, so the
+dropped indexed strips are not a difference between the two.
+
 Open GPU issues in the campaign (Winter Contingency):
 
-- Red/green speckled patches on terrain and foliage, changing per frame. The combine pass
-  samples a `k_2_10_10_10_AS_16_16_16_16` texture at 0x02354000 that, in our command
-  stream, only ever receives an 8888 resolve of the gamma albedo target. Not fixed by any
-  patch above. Next step: compare the resolve sequence with Xenia on the same scene (Xenia
-  needs a profile to start the campaign; `tools/virtual_pad.py` can drive it).
+- Faint cyan speckles on the near ground in the Falcon landing shot (Xenia: plain dirt).
+  Probably another gamma/7e3 round trip; the same-layout 8888 <-> gamma transfer still decodes
+  to the lower edge (as Xenia does).
 - About 4 indexed, discrete-tessellated triangle strip draws per frame are dropped
-  ("Unsupported tessellation mode 0 for primitive type 6"); Xenia 82d0cd1 drops them too.
-- GPU hang (amdgpu `ring gfx timeout`, `VK_ERROR_DEVICE_LOST`) about 5 minutes into the
+  ("Unsupported tessellation mode 0 for primitive type 6"); Xenia 82d0cd1 drops indexed ones
+  too (it converts auto-indexed strips/fans only, see `experimental/0014`).
+- GPU hang (amdgpu `ring gfx timeout`, `VK_ERROR_DEVICE_LOST`) about 4-5 minutes into the
   campaign, during the Falcon flight; the kernel recovers the GPU.
+- The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
+  `d3d12_render_target_cache.cc`) before Windows builds.

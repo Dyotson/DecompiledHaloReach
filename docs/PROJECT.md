@@ -115,6 +115,24 @@ Check exact param names in `endpoints.json` before calling.
   dropped tessellated strips, GPU hang ~5 min in. `REACH_AUTOPRESS` now drives sticks and triggers
   (`300:LSUP:4`, `RT`).
 
+- 2026-10-09 (morning): **red terrain fixed** (SDK patch 0015). The red/green speckle on terrain,
+  foliage and stars was a precision loss in the 7e3 -> 8_8_8_8_GAMMA -> 8_8_8_8 EDRAM round trip
+  Reach uses for its forward-lit surfaces; one gamma byte came back one lower and the combine
+  pass's hand-written 7e3 decode turned that into 2^6 red. Xenia decodes gamma bytes to the
+  midpoint of their linear range; ported (`docs/sdk_patches.md` has the full trace). Found by
+  capturing the same cinematic shot in both: Xenia uses a profile copied from the user's EmuDeck
+  Xenia (`content/E03000003463994D` into `~/.local/share/Xenia/content` plus
+  `logged_profile_slot_0_xuid` in its config), driven with `tools/virtual_pad.py -` (reads one
+  input per line from stdin, so menus can be stepped while watching screenshots). New RenderDoc
+  scripts: `resolves.py`, `phist.py`, `pick.py`, `blend.py`, `savetex.py`, `bufdump.py`.
+  Open: faint cyan speckles on near ground in the Falcon landing, dropped indexed tessellated
+  strips, GPU hang ~4-5 min in.
+- Scripted runs need every SDL pad ignored: with a pad connected (including Steam Input's and
+  Sunshine's virtual ones) the scripted presses never reach the campaign. `run_reach.sh` sets
+  `SDL_*_IGNORE_DEVICES_EXCEPT` when `REACH_AUTOPRESS` is set; Xenia needs
+  `SDL_GAMECONTROLLER_IGNORE_DEVICES=<vid/pid,...>` for the same reason, or the virtual pad
+  becomes player 2 (unsigned profile).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
@@ -126,6 +144,10 @@ Check exact param names in `endpoints.json` before calling.
   capture Xenia with `tools/renderdoc/trigger_capture.py`, then run the `tools/renderdoc/*.py`
   scripts with `qrenderdoc --python` to match draws, diff constants/textures/interpolators, and
   swap in instrumented SPIR-V (`instrument.py`) to see intermediate register values.
+  Load times vary by tens of seconds between runs (more under RenderDoc), so fixed capture times
+  miss shots: set `REACH_RDCAPTURE_TRIGGER=<file>` and touch that file to capture (the file is
+  polled every 10 swaps and deleted), e.g. from a loop that converts periodic `REACH_FRAMEDUMP`s
+  and checks them. `/tmp` is RAM-backed here; delete captures you are done with.
 - Frame dumps without screenshots: `REACH_FRAMEDUMP=20,28` + `--vulkan_readback_resolve=true`, then
   `tools/frame_to_png.py`. Texture binding trace: `REACH_TEXTRACE=1`. Live guest memory: `tools/guestmem.py`.
   `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.

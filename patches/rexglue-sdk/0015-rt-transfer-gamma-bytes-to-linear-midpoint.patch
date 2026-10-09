@@ -1,0 +1,81 @@
+--- a/src/graphics/vulkan/render_target_cache.cpp
++++ b/src/graphics/vulkan/render_target_cache.cpp
+@@ -3153,6 +3153,39 @@
+   spv::Id const_float_minus_1 = builder.makeFloatConstant(-1.0f);
+   spv::Id const_float_32767 = builder.makeFloatConstant(32767.0f);
+   spv::Id const_float_inv_32767 = builder.makeFloatConstant(1.0f / 32767.0f);
++  // Decodes a raw EDRAM gamma byte to the midpoint of its linear quantization
++  // range. The midpoint survives the R16G16B16A16_UNORM storage of
++  // k_8_8_8_8_GAMMA and re-encodes (LinearToPWLGamma truncates) to the
++  // original byte, while the exact lower edge can round below it and come back
++  // one less (as in Xenia's GammaByteToLinearMidpoint).
++  auto GammaByteToLinearMidpoint = [&](spv::Id byte_uint) -> spv::Id {
++    struct Piece {
++      uint32_t threshold;
++      float recip;
++      float offset;
++    };
++    static const Piece kPieces[] = {
++        {64, 1.0f / 511.5f, -31.5f / 511.5f},
++        {96, 1.0f / 255.75f, -63.5f / 255.75f},
++        {192, 1.0f / 127.875f, -127.5f / 127.875f},
++    };
++    spv::Id recip = builder.makeFloatConstant(1.0f / 1023.0f);
++    spv::Id offset = builder.makeFloatConstant(0.5f / 1023.0f);
++    for (const Piece& piece : kPieces) {
++      spv::Id in_piece = builder.createBinOp(spv::OpUGreaterThanEqual, builder.makeBoolType(),
++                                             byte_uint, builder.makeUintConstant(piece.threshold));
++      recip = builder.createTriOp(spv::OpSelect, type_float, in_piece,
++                                  builder.makeFloatConstant(piece.recip), recip);
++      offset = builder.createTriOp(spv::OpSelect, type_float, in_piece,
++                                   builder.makeFloatConstant(piece.offset), offset);
++    }
++    return builder.createBinOp(
++        spv::OpFAdd, type_float,
++        builder.createBinOp(spv::OpFMul, type_float,
++                            builder.createUnaryOp(spv::OpConvertUToF, type_float, byte_uint),
++                            recip),
++        offset);
++  };
+   auto PWLGammaToLinear = [&](spv::Id gamma, bool gamma_pre_saturated) -> spv::Id {
+     if (!gamma_pre_saturated) {
+       gamma = builder.createTriBuiltinCall(type_float, ext_inst_glsl_std_450, GLSLstd450NClamp,
+@@ -3754,22 +3787,24 @@
+             case xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA: {
+               spv::Id component_width = builder.makeUintConstant(8);
+               spv::Id unorm_scale = builder.makeFloatConstant(1.0f / 255.0f);
++              // 8_8_8_8_GAMMA is represented by linear stored in
++              // R16G16B16A16_UNORM: decode the raw RGB bytes to linear. Alpha
++              // stays linear.
++              bool decode_gamma =
++                  dest_color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA &&
++                  gamma_render_target_as_unorm16_;
+               id_vector_temp.clear();
+               for (uint32_t i = 0; i < 4; ++i) {
+-                id_vector_temp.push_back(builder.createBinOp(
+-                    spv::OpFMul, type_float,
+-                    builder.createUnaryOp(
+-                        spv::OpConvertUToF, type_float,
+-                        builder.createTriOp(spv::OpBitFieldUExtract, type_uint, packed,
+-                                            builder.makeUintConstant(8 * i), component_width)),
+-                    unorm_scale));
+-              }
+-              if (dest_color_format == xenos::ColorRenderTargetFormat::k_8_8_8_8_GAMMA &&
+-                  gamma_render_target_as_unorm16_) {
+-                // 8_8_8_8_GAMMA is represented by linear stored in
+-                // R16G16B16A16_UNORM.
+-                for (uint32_t i = 0; i < 3; ++i) {
+-                  id_vector_temp[i] = PWLGammaToLinear(id_vector_temp[i], true);
++                spv::Id byte_uint =
++                    builder.createTriOp(spv::OpBitFieldUExtract, type_uint, packed,
++                                        builder.makeUintConstant(8 * i), component_width);
++                if (decode_gamma && i < 3) {
++                  id_vector_temp.push_back(GammaByteToLinearMidpoint(byte_uint));
++                } else {
++                  id_vector_temp.push_back(builder.createBinOp(
++                      spv::OpFMul, type_float,
++                      builder.createUnaryOp(spv::OpConvertUToF, type_float, byte_uint),
++                      unorm_scale));
+                 }
+               }
+               builder.createStore(

@@ -13,7 +13,10 @@
 //
 // REACH_RDCAPTURE="25,90" asks RenderDoc (when the game runs under renderdoccmd)
 // to capture a few frames at each of those times, without needing keyboard
-// focus. Each capture is a separate .rdc file.
+// focus. Each capture is a separate .rdc file. REACH_RDCAPTURE_TRIGGER=<path>
+// also captures whenever that file appears (it is deleted again), so a scene
+// can be caught by hand while watching periodic frame dumps; load times vary
+// too much between runs for fixed times to land on the same shot.
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -153,8 +156,15 @@ void MaybeTriggerRenderDocCapture(double now) {
     }
     return;
   }
-  if (next >= times.size() || now < times[next]) return;
+  static const char* trigger = std::getenv("REACH_RDCAPTURE_TRIGGER");
+  static int polls = 0;
+  bool due = next < times.size() && now >= times[next];
   while (next < times.size() && times[next] <= now) ++next;
+  // The trigger file is polled every 10 swaps.
+  if (!due && trigger && *trigger && ++polls % 10 == 0) {
+    due = std::remove(trigger) == 0;
+  }
+  if (!due) return;
   if (!api) {
     void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
     auto get_api =
@@ -164,6 +174,7 @@ void MaybeTriggerRenderDocCapture(double now) {
       REXLOG_WARN("REACH_RDCAPTURE: RenderDoc is not loaded (run under renderdoccmd capture)");
       api = nullptr;
       next = times.size();
+      trigger = nullptr;
       return;
     }
   }
