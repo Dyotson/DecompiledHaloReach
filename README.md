@@ -92,7 +92,7 @@ Game saves and the emulated cache partitions are stored under `~/.local/share/re
 | `reach-recomp/reach_manifest.toml` | Codegen manifest: main executable and guest DLL modules |
 | `reach-recomp/hints/` | Function boundary, entry point and native-replacement (`[rexcrt]`) hints |
 | `reach-recomp/src/` | Our runtime code: app setup, kernel overrides, cross-DLL thunks |
-| `reach-recomp/generated/` | Codegen output. **Not committed**, except the SDK's `rexglue.cmake` |
+| `reach-recomp/generated/` | Codegen output. **Not committed** here (translated game code), except the SDK's `rexglue.cmake`. The maintainer keeps a private copy, synced with `tools/sync_generated_repo.sh` |
 | `tools/` | Extraction, analysis, run and debug tooling |
 | `docs/` | Project log, debugging recipes, reverse-engineering notes |
 | `docs/symbols/` | Function names recovered in Ghidra (`address,name` CSV) |
