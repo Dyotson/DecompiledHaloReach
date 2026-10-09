@@ -133,6 +133,17 @@ Check exact param names in `endpoints.json` before calling.
   `SDL_GAMECONTROLLER_IGNORE_DEVICES=<vid/pid,...>` for the same reason, or the virtual pad
   becomes player 2 (unsigned profile).
 
+- 2026-10-09 (midday): **gameplay reached** (with adaptive tessellation draws skipped by a local
+  debug switch). The next crash, "Call to invalid or unregistered function at 0x82853FB0" ~6 min
+  in, was a function only reachable through a callback table the game fills at run time
+  (`sub_82874A20` indexes it by type), so no static reference exists. Found the caller with gdb
+  (`break rex::runtime::InvalidFunctionTrap`, then `bt`). `tools/find_orphan_functions.py`
+  lists code no generated function covers and nothing static reaches; `hints/indirect_entries_3.toml`
+  registers 138 such functions (11 with an explicit `end`). Seven CRT entries in
+  `indirect_entries_2.toml` that split functions are pruned again. Open: the GPU hang on the
+  first adaptive-tessellation draw (patch 0016 is part of it), black 3D world in most gameplay
+  frames (HUD fine), cyan tint on foliage.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

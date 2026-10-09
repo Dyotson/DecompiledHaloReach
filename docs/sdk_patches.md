@@ -21,6 +21,7 @@ Xenia Canary `82d0cd1f4`, the build we use as the reference.
 | 0009 | Shader translator | Scalar ALU operand ignored the Z component when paired with a 3-source vector op (Xenia 92ada8ebc0) | wrong shader math |
 | 0011 | Resolve clears | 64bpp clear value halves swapped (Xenia 16e1eb8e28) | 16_16_16_16 / 32_32 clears in wrong colors |
 | 0013 | Draw filtering | Draws with `kill_pix_post_hi_z` but no VIZ query were rasterized (Xenia draw_util) | proxy geometry drawn into targets |
+| 0016 | Vulkan tessellation | The adaptive tessellation vertex shader converted the edge factor's raw bits to float (`float(value)`) instead of reinterpreting them (`uintBitsToFloat`), so every edge got the maximum factor; 16-in-32 index endianness also applied an 8-in-16 swap (Xenia `tessellation_adaptive.vs`) | needed for water; the GPU hang persists (see below) |
 | 0015 | Vulkan RT transfer | Raw gamma bytes decoded to the lower edge of their linear range before being stored in the R16G16B16A16_UNORM gamma target; UNORM16 rounding then re-encodes some bytes one lower (Xenia decodes to the midpoint, `GammaByteToLinearMidpoint`) | red/green speckled terrain, foliage and stars in the campaign. **Fixed.** |
 
 `experimental/0014` (tessellated triangle strips/fans as lists) is not applied; see its
@@ -67,7 +68,12 @@ Open GPU issues in the campaign (Winter Contingency):
 - About 4 indexed, discrete-tessellated triangle strip draws per frame are dropped
   ("Unsupported tessellation mode 0 for primitive type 6"); Xenia 82d0cd1 drops indexed ones
   too (it converts auto-indexed strips/fans only, see `experimental/0014`).
-- GPU hang (amdgpu `ring gfx timeout`, `VK_ERROR_DEVICE_LOST`) about 4-5 minutes into the
-  campaign, during the Falcon flight; the kernel recovers the GPU.
+- GPU hang (amdgpu `ring gfx timeout`, `VK_ERROR_DEVICE_LOST`) about 4 minutes into the
+  campaign as the Falcons take off. `RADV_DEBUG=hang` (report under `$HOME/radv_dumps_*`)
+  points at the first adaptive-tessellation draw (`kTrianglePatch`, 5142 float32 edge factors,
+  8-in-32, `VGT_HOS_MAX_TESS_LEVEL` 15; probably water): the very first one hangs, and
+  skipping those draws avoids the hang (the run then reaches gameplay). 0016 fixed the factor
+  decoding but not the hang; hull shaders and domain-shader register setup match Xenia, so the
+  translated domain or pixel shader is the next suspect.
 - The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
   `d3d12_render_target_cache.cc`) before Windows builds.

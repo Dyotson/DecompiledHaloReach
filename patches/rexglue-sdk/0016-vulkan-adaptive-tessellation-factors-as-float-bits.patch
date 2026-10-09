@@ -1,0 +1,56 @@
+--- a/src/graphics/vulkan/pipeline_cache.cpp
++++ b/src/graphics/vulkan/pipeline_cache.cpp
+@@ -125,15 +125,19 @@
+   return ((value & 0x0000FFFFu) << 16u) | (value >> 16u);
+ }
+ 
+-void main() {
+-  uint value = uint(gl_VertexIndex);
+-  uint endian = xe_system_cbuffer.xe_vertex_index_endian;
+-  if (endian == 1u || endian == 2u || endian == 3u) {
++// xenos::Endian: 1 is 8-in-16, 2 is 8-in-32 (both swaps), 3 is 16-in-32 only.
++uint xe_endian_swap_32(uint value, uint endian) {
++  if (endian == 1u || endian == 2u) {
+     value = xe_swap_8_in_16(value);
+   }
+   if (endian == 2u || endian == 3u) {
+     value = xe_swap_16_in_32(value);
+   }
++  return value;
++}
++
++void main() {
++  uint value = xe_endian_swap_32(uint(gl_VertexIndex), xe_system_cbuffer.xe_vertex_index_endian);
+   value = uint(int(value) + xe_system_cbuffer.xe_vertex_base_index);
+   value &= 0x00FFFFFFu;
+   value = max(value, xe_system_cbuffer.xe_vertex_index_min);
+@@ -159,16 +163,24 @@
+   return ((value & 0x0000FFFFu) << 16u) | (value >> 16u);
+ }
+ 
+-void main() {
+-  uint value = uint(gl_VertexIndex);
+-  uint endian = xe_system_cbuffer.xe_vertex_index_endian;
+-  if (endian == 1u || endian == 2u || endian == 3u) {
++// xenos::Endian: 1 is 8-in-16, 2 is 8-in-32 (both swaps), 3 is 16-in-32 only.
++uint xe_endian_swap_32(uint value, uint endian) {
++  if (endian == 1u || endian == 2u) {
+     value = xe_swap_8_in_16(value);
+   }
+   if (endian == 2u || endian == 3u) {
+     value = xe_swap_16_in_32(value);
+   }
+-  float tessellation_factor = float(value) + 1.0;
++  return value;
++}
++
++void main() {
++  uint value = xe_endian_swap_32(uint(gl_VertexIndex), xe_system_cbuffer.xe_vertex_index_endian);
++  // The index buffer holds the float32 edge factors themselves (as in
++  // Xenia's tessellation_adaptive.vs): reinterpret the bits, don't convert the
++  // integer, or every edge gets the maximum factor and the draw can take long
++  // enough to hang the GPU.
++  float tessellation_factor = uintBitsToFloat(value) + 1.0;
+   tessellation_factor = max(
+       tessellation_factor, xe_system_cbuffer.xe_tessellation_factor_range_min);
+   tessellation_factor = min(

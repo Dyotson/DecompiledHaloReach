@@ -12,13 +12,13 @@
 0x827E8910 = { name = "sub_827E8910" }  # data:.rdata:0x82070fa8
 0x827F02AC = { name = "sub_827F02AC" }  # data:.rdata:0x82071100
 0x827F6DA0 = { name = "sub_827F6DA0" }  # data:.rdata:0x820712d0
-0x827F76E8 = { name = "sub_827F76E8" }  # data:.rdata:0x82071338
+# split-pruned: 0x827F76E8 = { name = "sub_827F76E8" }  # data:.rdata:0x82071338
 0x827F88CC = { name = "sub_827F88CC" }  # data:.rdata:0x820713d0
 0x8280171C = { name = "sub_8280171C" }  # data:.rdata:0x82071418
-0x8280B1F4 = { name = "sub_8280B1F4" }  # code:0x8280b238
-0x8280B1F8 = { name = "sub_8280B1F8" }  # code:0x8280b28c
-0x8280B998 = { name = "sub_8280B998" }  # code:0x8280b9dc
-0x8280B99C = { name = "sub_8280B99C" }  # code:0x8280ba30
-0x8280BF08 = { name = "sub_8280BF08" }  # code:0x8280bf28
-0x8280BF0C = { name = "sub_8280BF0C" }  # code:0x8280bf54
+# split-pruned: 0x8280B1F4 = { name = "sub_8280B1F4" }  # code:0x8280b238
+# split-pruned: 0x8280B1F8 = { name = "sub_8280B1F8" }  # code:0x8280b28c
+# split-pruned: 0x8280B998 = { name = "sub_8280B998" }  # code:0x8280b9dc
+# split-pruned: 0x8280B99C = { name = "sub_8280B99C" }  # code:0x8280ba30
+# split-pruned: 0x8280BF08 = { name = "sub_8280BF08" }  # code:0x8280bf28
+# split-pruned: 0x8280BF0C = { name = "sub_8280BF0C" }  # code:0x8280bf54
 0x8282951C = { name = "sub_8282951C" }  # data:.rdata:0x82071430
