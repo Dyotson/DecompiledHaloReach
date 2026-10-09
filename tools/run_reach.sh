@@ -6,6 +6,7 @@
 # ReXGlue 0.10.0.24 nightly, which fixes atomics/fences/VMX packing over 0.10.0).
 # By default START is pressed at 9 s and 10 s to skip the ~37 s intro video (it
 # starts at ~8 s); set REACH_AUTOPRESS="" to watch it, or to a schedule of your own.
+# REACH_LOG_LEVEL overrides the log level (default debug; trace logs every GPU upload).
 set -u
 ROOT="$(cd "$(dirname "$0")/.." && pwd)"
 SECS="${1:-60}"
@@ -16,7 +17,7 @@ export REACH_AUTOPRESS="${REACH_AUTOPRESS-9:START,10:START}"
 export LD_LIBRARY_PATH="${REXSDK:-$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64}/lib:$PWD"
 timeout --signal=INT --kill-after=10 "$SECS" ./reach \
     --game_data_root="$ROOT/extracted/xbox360" \
-    --log_file=/tmp/reach_run.log --log_level=debug "$@" > /tmp/reach_run.out 2>&1
+    --log_file=/tmp/reach_run.log --log_level="${REACH_LOG_LEVEL:-debug}" "$@" > /tmp/reach_run.out 2>&1
 echo "EXIT=$?" >> /tmp/reach_run.out
 
 # The runtime backs guest memory with /dev/shm/xenia_memory_* (~5 GB each) and

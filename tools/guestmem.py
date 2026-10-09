@@ -8,6 +8,9 @@ keeps running.
 Usage:
   guestmem.py search PID HEXBYTES [--max N]   e.g. 000000000000000000000000
   guestmem.py read PID GUEST_ADDR LENGTH       hex dump (big-endian dwords)
+  guestmem.py dump PID GUEST_ADDR LENGTH OUT    raw bytes to a file (also works on a
+                                               running Xenia, which maps guest memory
+                                               at the same host base)
 """
 import sys
 
@@ -60,6 +63,10 @@ def main():
         limit = int(sys.argv[sys.argv.index("--max") + 1]) if "--max" in sys.argv else 64
         for hit in search(pid, needle, limit):
             print(f"0x{hit:08X}")
+    elif cmd == "dump":
+        addr, length, out = int(sys.argv[3], 16), int(sys.argv[4], 0), sys.argv[5]
+        with open(out, "wb") as f:
+            f.write(read(pid, addr, length))
     elif cmd == "read":
         addr, length = int(sys.argv[3], 16), int(sys.argv[4], 0)
         data = read(pid, addr, length)

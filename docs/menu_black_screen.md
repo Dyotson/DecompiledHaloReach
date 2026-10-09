@@ -43,6 +43,29 @@ Intro/input waits (scripted presses change nothing), async pipeline compilation
 XexGetModuleSection resources (all succeed), corrupted cache maps, the SDK version (0.10.0 and
 the 0.10.0.24 nightly behave the same), the `bdz` tail-call codegen bug (fixed, no change).
 
+## Update (2026-10-08, session 2)
+
+- **GPU texture staleness ruled out**: firing the physical-memory write callbacks over the whole
+  mirror at runtime (`REACH_INVALIDATE_AT`) re-uploads every watched texture; the frame is
+  unchanged.
+- **The extra composite shaders are a red herring**: `Function_821BB700` (final composite) picks
+  variant 1/5 (temporal-AA ping-pong with `_surface_antialias_lastframe` on stage 6) on ~98 % of
+  frames, the same as Xenia; variants 0/11 (the shaders only we compile) appear on ~1.5 %.
+- **The black quad is the UI layer.** Its pixels are RGB 0 with alpha 1/255: an empty, cleared
+  render target composited opaquely over the scene. In Xenia that copy is the full-screen title
+  art, so our UI render target stays empty (widgets not drawn, or drawn fully transparent).
+- **Memory diff vs Xenia** (`tools/diff_guest_data.py` on `.data` snapshots taken with
+  `tools/guestmem.py dump` from both processes; Xenia maps guest memory at the same host base).
+  The runtime signs in a default profile ("User") while Xenia had none, which changes the menu
+  path; `REACH_NO_SIGNIN=1` (`src/kernel/xam_signin.cpp`) removes that difference (both then put
+  controller 0 on UI window 4). The menu stays black either way.
+- **Fixed on the way**: directories marked delete-on-close were never deleted, so the game's
+  web cache (`cache1:\webcache`, object 0x82ABE090) failed to re-create with
+  OBJECT_NAME_COLLISION (`src/kernel/file_delete_on_close.cpp`). Not the menu cause.
+- Remaining state differences with identical setup: `0x83150DA4` (rasterizer globals, Xenia 0 /
+  ours 5), `0x831BB3E0`, `0x831BB5F0`, `0x839BEDEC` (bit 7 vs 6). Render surface ids are in
+  `docs/symbols/render_surfaces.csv`.
+
 ## Leading hypotheses
 
 1. **Engine picks the wrong final-composite permutation.** Something the engine reads (a

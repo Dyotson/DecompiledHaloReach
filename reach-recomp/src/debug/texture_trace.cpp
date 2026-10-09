@@ -8,17 +8,21 @@
 // with an invalid header, and each distinct caller binding NULL, then forwards
 // to the recompiled function.
 
+#include <fmt/format.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#include <bit>
 #include <chrono>
+#include <string>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
 #include <map>
 #include <mutex>
 #include <set>
+#include <tuple>
 #include <utility>
 
 REX_EXTERN(__imp__sub_8216B0C8);
@@ -150,4 +154,65 @@ extern "C" REX_FUNC(sub_8216AD90) {
     }
   }
   __imp__sub_8216AD90(ctx, base);
+}
+
+// Function_8218CA88(stage, global_texture_id) binds engine-global textures
+// (render targets, noise, LUTs) to a sampler stage. Log each distinct
+// (caller, stage, id) once to see which passes bind what.
+REX_EXTERN(__imp__sub_8218CA88);
+
+extern "C" REX_FUNC(sub_8218CA88) {
+  if (Enabled()) {
+    static std::mutex mutex;
+    static std::set<std::tuple<uint32_t, uint32_t, uint32_t>> seen;
+    std::lock_guard lock(mutex);
+    if (seen.size() < 400 &&
+        seen.emplace(static_cast<uint32_t>(ctx.lr), ctx.r3.u32, ctx.r4.u32).second) {
+      REXLOG_INFO("REACH_TEXTRACE: bind_global stage={} id={:#x} caller={:#010x}", ctx.r3.u32,
+                  ctx.r4.u32, static_cast<uint32_t>(ctx.lr));
+    }
+  }
+  __imp__sub_8218CA88(ctx, base);
+}
+
+// Function_821BB700 is the final composite. It picks the composite variant
+// from bytes +0x98/+0x9A/+0x9B of the struct at *(0x83150D58) + 0x3A8 (only
+// when the byte at 0x8315110C is 0). Log what it sees.
+REX_EXTERN(__imp__sub_821BB700);
+
+extern "C" REX_FUNC(sub_821BB700) {
+  if (Enabled()) {
+    // Histogram of the variant the composite will pick (same logic as the guest).
+    static std::map<int, uint64_t> variants;
+    static auto last_hist = std::chrono::steady_clock::now();
+    const uint32_t v = LoadBE32(base + 0x83150D58u);
+    int variant = 0;
+    if (base[0x8315110Cu] == 0) {
+      const uint8_t* st = base + v + 0x3A8;
+      if (st[0x98]) variant = st[0x9A] ? 5 : 1;
+      else if (st[0x9B]) variant = 0x0B;
+    }
+    ++variants[variant];
+    if (std::chrono::steady_clock::now() - last_hist > std::chrono::seconds(4)) {
+      last_hist = std::chrono::steady_clock::now();
+      std::string h;
+      for (auto& [k, n] : variants) h += fmt::format(" v{}={}", k, n);
+      REXLOG_WARN("REACH_TEXTRACE: composite variants:{} (blur amount s+0xAC={})", h,
+                  std::bit_cast<float>(LoadBE32(base + v + 0x3A8 + 0xAC)));
+    }
+  }
+  if (Enabled()) {
+    static auto last = std::chrono::steady_clock::now() - std::chrono::seconds(10);
+    auto now = std::chrono::steady_clock::now();
+    if (now - last > std::chrono::seconds(3)) {
+      last = now;
+      const uint32_t view = LoadBE32(base + 0x83150D58u);
+      const uint8_t gate = base[0x8315110Cu];
+      const uint32_t s = view + 0x3A8;
+      REXLOG_WARN(
+          "REACH_TEXTRACE: composite view_ptr={:#010x} gate={} s={:#010x} s+98={} s+9A={} s+9B={}",
+          view, gate, s, base[s + 0x98], base[s + 0x9A], base[s + 0x9B]);
+    }
+  }
+  __imp__sub_821BB700(ctx, base);
 }

@@ -32,6 +32,14 @@ class ReachApp : public rex::ReXApp {
   // utility partitions; the game links cache0:/cache1: to these devices.
   void OnPreLaunchModule() override {
     auto* vfs = runtime()->file_system();
+    // At boot the game opens cache1:\webcache, marks it delete-on-close and
+    // recreates it. The runtime does not delete directories on close, so the
+    // recreate fails with STATUS_OBJECT_NAME_COLLISION and the web cache
+    // (0x82ABE090) never initializes. Clear it here; the game rebuilds it.
+    {
+      std::error_code ec;
+      std::filesystem::remove_all(cache_root() / "cache1" / "webcache", ec);
+    }
     for (const char* name : {"cache0", "cache1"}) {
       std::filesystem::path host = cache_root() / name;
       std::error_code ec;
