@@ -36,6 +36,7 @@
 // calls and then every 1000th.
 
 #include "identity.h"
+#include "live.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -450,6 +451,16 @@ class VNet {
     }
   }
 
+  // The Reach Live server's address and the TCP port of its title servers (HTTP);
+  // false without a server or before it told us the port.
+  bool LiveServerHttp(uint32_t& ip, uint16_t& port) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!live_ || !server_.ip || !http_port_) return false;
+    ip = server_.ip;
+    port = http_port_;
+    return true;
+  }
+
   // Virtual IP of a peer's XNADDR.
   uint32_t VipOfXnAddr(const uint8_t* xna) {
     const uint32_t ina = Load32(xna);
@@ -729,6 +740,7 @@ class VNet {
         bool changed;
         {
           std::lock_guard<std::mutex> lock(mutex_);
+          if (n >= 14 + motd_size + 2) http_port_ = Load16(p + 14 + motd_size);
           changed = id != live_id_ || epoch != live_epoch_;
           live_id_ = id;
           live_epoch_ = epoch;
@@ -886,6 +898,7 @@ class VNet {
   uint32_t live_id_ = 0;     // our id on the server, 0 until it welcomes us
   uint16_t live_epoch_ = 0;
   Endpoint public_ep_;
+  uint16_t http_port_ = 0;  // the server's title servers (HTTP), from its welcome
   Clock::time_point last_welcome_{};
   std::unordered_map<uint32_t, LivePeer> live_peers_;
   std::unordered_map<uint32_t, uint32_t> live_id_by_vip_;
@@ -898,6 +911,12 @@ bool Ours(uint32_t handle) {
 void SetError(uint32_t error) { rex::system::XThread::SetLastError(error); }
 
 }  // namespace
+
+namespace reach {
+bool LiveServerHttp(uint32_t& ip, uint16_t& port) {
+  return NetOn() && VNet::Get().LiveServerHttp(ip, port);
+}
+}  // namespace reach
 
 #define REACH_NET_SDK(name) \
   static GuestFunc sdk = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__" #name))
@@ -942,7 +961,9 @@ REACH_NET_FUNC(NetDll_XNetGetEthernetLinkStatus, NetOn(), {
 // DWORD XNetGetTitleXnAddr(XNADDR* pxna)
 REACH_NET_FUNC(NetDll_XNetGetTitleXnAddr, NetOn() && VNet::Get().Ready(), {
   if (ctx.r4.u32) VNet::Get().WriteSelfXnAddr(base + ctx.r4.u32);
-  ctx.r3.u64 = 0x06;  // XNET_GET_XNADDR_STATIC | XNET_GET_XNADDR_ETHERNET
+  // XNET_GET_XNADDR_STATIC | XNET_GET_XNADDR_ETHERNET, plus XNET_GET_XNADDR_ONLINE
+  // when signed in to Live.
+  ctx.r3.u64 = reach::LiveSignin() ? 0x86 : 0x06;
 })
 
 // INT XNetXnAddrToInAddr(const XNADDR* pxna, const XNKID* pxnkid, IN_ADDR* pina)
@@ -1004,7 +1025,12 @@ REACH_NET_FUNC(NetDll_XNetRandom, NetOn(), {
   if (NetTrace()) REXLOG_INFO("NETTRACE XNetRandom({}) from{}", ctx.r5.u32, GuestBacktrace(ctx, base, 12));
   ctx.r3.u64 = 0;
 })
-REACH_NET_TRACE(NetDll_XNetServerToInAddr)
+// INT XNetServerToInAddr(IN_ADDR ina, DWORD dwServiceId, IN_ADDR* pina): title server
+// addresses (from the title server enumeration) are plain IPs here.
+REACH_NET_FUNC(NetDll_XNetServerToInAddr, reach::LiveSignin() && ctx.r6.u32, {
+  Store32(base + ctx.r6.u32, ctx.r4.u32);
+  ctx.r3.u64 = 0;
+})
 REACH_NET_TRACE(NetDll_XNetQosLookup)
 REACH_NET_TRACE(NetDll_XNetQosServiceLookup)
 REACH_NET_TRACE(NetDll_XNetQosRelease)
@@ -1027,11 +1053,35 @@ REACH_NET_FUNC(NetDll_bind, Ours(ctx.r4.u32), {
 })
 
 // int connect(SOCKET s, const sockaddr* name, int namelen)
-REACH_NET_FUNC(NetDll_connect, Ours(ctx.r4.u32), {
-  const uint8_t* a = base + ctx.r5.u32;
-  VNet::Get().Connect(ctx.r4.u32, Load32(a + 4), Load16(a + 2));
-  ctx.r3.u64 = 0;
-})
+// Datagram sockets are ours. A TCP connection to the Reach Live server (the title
+// servers, which XNetServerToInAddr resolves to it) goes to its HTTP port, whatever
+// port the game asked for.
+extern "C" REX_FUNC(__imp__NetDll_connect) {
+  REACH_NET_SDK(NetDll_connect);
+  static std::atomic<uint64_t> calls{0};
+  const uint32_t in[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+  const uint32_t lr = uint32_t(ctx.lr);
+  uint8_t* a = base + ctx.r5.u32;
+  if (Ours(ctx.r4.u32)) {
+    VNet::Get().Connect(ctx.r4.u32, Load32(a + 4), Load16(a + 2));
+    ctx.r3.u64 = 0;
+    Log("NetDll_connect", calls, in, ctx.r3.u32, " (REACH_NET)", lr);
+    return;
+  }
+  uint32_t server_ip;
+  uint16_t http_port;
+  const uint16_t port = Load16(a + 2);
+  const bool to_server = NetOn() && ctx.r5.u32 && VNet::Get().LiveServerHttp(server_ip, http_port) &&
+                         Load32(a + 4) == server_ip;
+  if (to_server) {
+    REXLOG_INFO("REACH_LIVE: title server connection (port {}) goes to {}:{}", port,
+                IpString(server_ip), http_port);
+    Store16(a + 2, http_port);
+  }
+  if (sdk) sdk(ctx, base);
+  if (to_server) Store16(a + 2, port);
+  Log("NetDll_connect", calls, in, ctx.r3.u32, to_server ? " (title server)" : "", lr);
+}
 
 // int closesocket(SOCKET s)
 REACH_NET_FUNC(NetDll_closesocket, Ours(ctx.r4.u32), {
@@ -1174,6 +1224,10 @@ REACH_NET_TRACE(NetDll_inet_addr)
 
 // --- XAM sessions, voice and messages (trace only) -------------------------
 
+REACH_NET_TRACE(XamShowSigninUI)
+REACH_NET_TRACE(XamUserAreUsersFriends)
+REACH_NET_TRACE(XamShowFriendRequestUI)
+REACH_NET_TRACE(XamShowGamerCardUIForXUID)
 REACH_NET_TRACE(XamSessionCreateHandle)
 REACH_NET_TRACE(XamSessionRefObjByHandle)
 REACH_NET_TRACE(XamVoiceCreate)

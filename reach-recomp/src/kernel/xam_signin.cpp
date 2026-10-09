@@ -9,6 +9,10 @@
 // The signed-in profile's XUID and gamertag come from identity.cpp when it has
 // one (REACH_XUID / REACH_GAMERTAG, or the Live identity with REACH_SERVER); the
 // SDK gives every instance 0xB13EBABEBABEBABE "User".
+//
+// With a Reach Live server and REACH_LIVE_SIGNIN=1, user 0 is signed in to Live:
+// the sign-in state is 2, the info has the Live-enabled flag and every privilege
+// is granted.
 
 #include "identity.h"
 
@@ -29,6 +33,7 @@ using GuestFunc = void (*)(PPCContext&, uint8_t*);
 
 constexpr uint32_t kErrorNoSuchUser = 0x00000525;  // X_ERROR_NO_SUCH_USER
 constexpr uint32_t kSigninStateNotSignedIn = 0;
+constexpr uint32_t kSigninStateSignedInToLive = 2;
 
 bool NoSignin() {
   static const bool enabled = [] {
@@ -73,7 +78,18 @@ void StoreName(uint8_t* p, uint32_t size, const char* name) {
   }
 
 // DWORD XamUserGetSigninState(DWORD user_index)
-REACH_FORWARD_OR(XamUserGetSigninState, ctx.r3.u64 = kSigninStateNotSignedIn)
+extern "C" REX_FUNC(__imp__XamUserGetSigninState) {
+  const uint32_t user_index = ctx.r3.u32;
+  if (NoSignin()) {
+    ctx.r3.u64 = kSigninStateNotSignedIn;
+    return;
+  }
+  static GuestFunc sdk = Sdk("__imp__XamUserGetSigninState");
+  if (sdk) sdk(ctx, base);
+  if (user_index == 0 && ctx.r3.u32 != kSigninStateNotSignedIn && reach::LiveSignin()) {
+    ctx.r3.u64 = kSigninStateSignedInToLive;
+  }
+}
 
 // DWORD XamUserGetSigninInfo(DWORD user_index, DWORD flags, X_USER_SIGNIN_INFO* info)
 extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
@@ -89,6 +105,12 @@ extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
   // X_USER_SIGNIN_INFO: xuid at 0, name[16] at 24.
   if (XuidOverride()) StoreXuid(base + info, XuidOverride());
   if (GamertagOverride()) StoreName(base + info + 24, 16, GamertagOverride());
+  if (reach::LiveSignin()) {
+    // dwInfoFlags (+8): XUSER_INFO_FLAG_LIVE_ENABLED; UserSigninState (+12).
+    base[info + 11] |= 1;
+    std::memset(base + info + 12, 0, 4);
+    base[info + 15] = kSigninStateSignedInToLive;
+  }
 }
 
 // DWORD XamUserGetXUID(DWORD user_index, DWORD type, XUID* xuid)
@@ -122,7 +144,20 @@ extern "C" REX_FUNC(__imp__XamUserGetName) {
 }
 
 // DWORD XamUserCheckPrivilege(DWORD user_index, DWORD privilege, BOOL* result)
-REACH_FORWARD_OR(XamUserCheckPrivilege, {
-  if (ctx.r5.u32) std::memset(base + ctx.r5.u32, 0, 4);
-  ctx.r3.u64 = kErrorNoSuchUser;
-})
+// The SDK denies every privilege. A Live player may do everything: multiplayer,
+// communications, user-created content (file share), profile viewing, presence.
+extern "C" REX_FUNC(__imp__XamUserCheckPrivilege) {
+  const uint32_t user_index = ctx.r3.u32, result = ctx.r5.u32;
+  if (NoSignin()) {
+    if (result) std::memset(base + result, 0, 4);
+    ctx.r3.u64 = kErrorNoSuchUser;
+    return;
+  }
+  static GuestFunc sdk = Sdk("__imp__XamUserCheckPrivilege");
+  if (sdk) sdk(ctx, base);
+  if (ctx.r3.u32 == 0 && result && (user_index == 0 || user_index == 0xFF) &&
+      reach::LiveSignin()) {
+    std::memset(base + result, 0, 4);
+    base[result + 3] = 1;
+  }
+}

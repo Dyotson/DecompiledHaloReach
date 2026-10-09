@@ -20,6 +20,8 @@ import random
 import struct
 import time
 
+import reach_live_lsp as lsp
+
 MAGIC = b"RLV1"
 VERSION = 1
 
@@ -66,6 +68,7 @@ class ReachLive(asyncio.DatagramProtocol):
         self.transport = None
         self.started = time.time()
         self.relayed_packets = 0
+        self.http_port = 0  # TCP port of the title servers, told to clients; 0 = none
 
     def connection_made(self, transport):
         self.transport = transport
@@ -132,7 +135,7 @@ class ReachLive(asyncio.DatagramProtocol):
         peer.seen = time.monotonic()
         peer.name, peer.xuid, peer.room, peer.local = name, xuid, room, (local_ip, local_port)
         body = struct.pack(">IHIHH", peer.id, self.epoch, ip_to_u32(addr[0]), addr[1], len(self.motd))
-        self.send(addr, WELCOME, body + self.motd)
+        self.send(addr, WELCOME, body + self.motd + struct.pack(">H", self.http_port))
 
     def forward_header(self, src):
         return struct.pack(">IIHIH", src.id, ip_to_u32(src.addr[0]), src.addr[1], src.local[0],
@@ -188,15 +191,48 @@ class ReachLive(asyncio.DatagramProtocol):
                 "players": len(self.peers), "relayed_packets": self.relayed_packets, "rooms": rooms}
 
 
-async def http_status(server, reader, writer):
-    """A one-page JSON status (GET anything), for a web front end or a quick check."""
+async def read_request(reader):
+    """One HTTP/1.x request: (method, path, headers, body)."""
+    head = await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 15)
+    lines = head.decode("latin-1").split("\r\n")
+    method, path = lines[0].split(" ")[:2]
+    headers = {}
+    for line in lines[1:]:
+        if ":" in line:
+            key, value = line.split(":", 1)
+            headers[key.strip().lower()] = value.strip()
+    length = int(headers.get("content-length", 0) or 0)
+    body = await asyncio.wait_for(reader.readexactly(length), 30) if length else b""
+    return method, path, headers, body
+
+
+def response(status, body, content_type="application/octet-stream", extra=()):
+    reason = {200: "OK", 400: "Bad Request", 404: "Not Found", 500: "Internal Server Error"}
+    head = [f"HTTP/1.0 {status} {reason.get(status, 'OK')}", f"Content-Type: {content_type}",
+            f"Content-Length: {len(body)}", "Access-Control-Allow-Origin: *", *extra]
+    return ("\r\n".join(head) + "\r\n\r\n").encode() + body
+
+
+async def http_handler(server, reader, writer):
+    """The HTTP side of the server, on --http-port. The game reaches it as its title
+    servers ("LSP": title/user storage, rewards; reach_live_lsp.py). GET / or /status
+    returns a JSON status page for people and web front ends."""
     try:
-        await asyncio.wait_for(reader.readuntil(b"\r\n\r\n"), 5)
-        body = json.dumps(server.status(), indent=2).encode()
-        writer.write(b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\n"
-                     b"Access-Control-Allow-Origin: *\r\nContent-Length: %d\r\n\r\n" % len(body) + body)
+        method, path, headers, body = await read_request(reader)
+        peer = writer.get_extra_info("peername")
+        if path in ("/", "/status"):
+            reply = response(200, json.dumps(server.status(), indent=2).encode(), "application/json")
+        else:
+            try:
+                status, content_type, data = lsp.handle(server, method, path, headers, body, peer)
+            except Exception:  # a bad request must not take the server down
+                log.exception("LSP %s %s failed", method, path)
+                status, content_type, data = 500, "text/plain", b"error"
+            log.info("http  %s %s %s -> %d (%d bytes)", peer[0], method, path, status, len(data))
+            reply = response(status, data, content_type)
+        writer.write(reply)
         await writer.drain()
-    except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError):
+    except (asyncio.TimeoutError, asyncio.IncompleteReadError, ConnectionError, ValueError):
         pass
     finally:
         writer.close()
@@ -208,7 +244,8 @@ async def main():
     parser.add_argument("--port", type=int, default=int(os.environ.get("REACH_LIVE_PORT", 21100)),
                         help="UDP port for the game (default 21100)")
     parser.add_argument("--http-port", type=int, default=0,
-                        help="TCP port for a JSON status page (default: off)")
+                        help="TCP port for the game's title servers (LSP) and a JSON status "
+                             "page (default: off)")
     parser.add_argument("--motd", default="Welcome to Reach Live", help="message sent to clients")
     parser.add_argument("--max-peers", type=int, default=1024)
     parser.add_argument("-v", "--verbose", action="store_true")
@@ -221,8 +258,9 @@ async def main():
         lambda: ReachLive(args.motd, args.max_peers), local_addr=(args.host, args.port))
     log.info("Reach Live listening on UDP %s:%d (epoch %04X)", args.host, args.port, server.epoch)
     if args.http_port:
-        await asyncio.start_server(lambda r, w: http_status(server, r, w), args.host, args.http_port)
-        log.info("status page on http://%s:%d/", args.host, args.http_port)
+        server.http_port = args.http_port
+        await asyncio.start_server(lambda r, w: http_handler(server, r, w), args.host, args.http_port)
+        log.info("title servers and status page on http://%s:%d/", args.host, args.http_port)
     try:
         while True:
             await asyncio.sleep(5)

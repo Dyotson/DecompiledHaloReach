@@ -106,6 +106,14 @@ bool LiveMode() {
   return on;
 }
 
+bool LiveSignin() {
+  static const bool on = [] {
+    const char* v = std::getenv("REACH_LIVE_SIGNIN");
+    return LiveMode() && v && *v && *v != '0';
+  }();
+  return on;
+}
+
 uint64_t IdentityXuid() { return Get().xuid; }
 
 const std::string& IdentityGamertag() { return Get().gamertag; }
