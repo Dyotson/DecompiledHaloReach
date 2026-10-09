@@ -49,7 +49,7 @@ the game (see [Legal](#legal)).
 | Intro video | Plays |
 | Title screen and start menu | Render correctly with the patched GPU plugin (the SDK bug behind the black menu is described in `docs/menu_black_screen.md`) |
 | Campaign (Winter Contingency) | Loads, plays the opening and reaches gameplay; rendering matches Xenia after 16 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); adaptive tessellation (water) skipped |
-| Progression (cR/rank/Armory) | Code mapped, see [`docs/progression_re.md`](docs/progression_re.md) |
+| Progression (cR/rank/Armory) | Works offline: cR earned in play, rank-ups, Armory purchases saved in the profile ([`docs/progression_re.md`](docs/progression_re.md)); daily challenges need the "Omaha" service (phase 2) |
 | Online P2P, Forge/file share | Not started |
 
 See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debugging recipes.

@@ -340,6 +340,14 @@ Commendations (`comg`, 45 entries of 0x34): for example headshot_mp has tiers 50
 
 ## 8. Recommendation: where a local credits/Armory service should hook
 
+**Status 2026-10-09: Phase 1 works in the recompiled build with no extra code.** The ReXGlue
+XAM layer already returns all 17 requested settings and persists TITLE_SPECIFIC1-3 as files
+(`~/.local/share/reach/4D53085B/profile/User/63E83FFF/FE/FD`, 1000 + 1000 + 768 bytes). Campaign
+play earns cR offline (block C), the rank went Recruit -> Private at 7,500, and an Armory purchase
+(Mark V [B] UA, 750 cR, after "Prerequisites met") deducts the cR, equips the item and survives a
+restart. The "Confirm purchase" dialog defaults to NO (scripted input: UP, then A).
+`tools/reach_profile.py` prints the saved state (blob version, SHA-1, cR blocks, owned items).
+
 **Phase 1 (no server, works today).** Purchases, rank, cR earning and the Armory are all client-side, so just make persistence work:
 - (a) The ReXGlue XAM layer must persist `TITLE_SPECIFIC1/2/3` (0x63E83FFF/FE/FD) per XUID, return all 17 requested settings with source = title for stored ones, and accept writes.
 - (b) XEX resource "00" must be readable, for the SHA-1 helper 0x82206240.

@@ -26,6 +26,7 @@ Xenia Canary `82d0cd1f4`, the build we use as the reference.
 | 0017 | SPIR-V domain shaders | Triangle domains and patch-indexed quads leave r0.w at 0; Xenia sets it to 1 | none seen yet (tessellated draws) |
 | 0018 | Primitive processor | New option `skip_adaptive_triangle_tessellation` (default on): drops adaptive triangle-patch draws with a one-time warning, because the first one hangs the GPU | not a fix: those surfaces (probably water) are missing |
 | 0019 | Defaults | `execute_unclipped_draw_vs_on_cpu` true, `readback_memexport` false, `gpu_allow_invalid_fetch_constants` true, as in Xenia. Without the first, a screen-space draw with clipping disabled was taken to use the whole EDRAM, so a depth buffer claimed the scene's tiles and the next ownership transfer replaced the lit scene with zeros | black 3D world in gameplay (HUD fine). **Fixed.** |
+| 0020 | VIZ queries | `PA_SC_VIZ_QUERY_STATUS` bits were set ("visible") at every VIZ_QUERY end and never cleared; Xenia leaves the register alone | none seen |
 
 `experimental/0014` (tessellated triangle strips/fans as lists) is not applied; see its
 README.
@@ -90,6 +91,12 @@ Open GPU issues in the campaign (Winter Contingency):
   (0017) now match Xenia; neither the domain nor the pixel shader has an unbounded loop (the
   pixel shader's one guest loop is bounded by a loop constant). 0018 skips these draws by
   default. Next: inspect the draw's inputs in a capture made just before it (or with the
+  Captures of Xenia at the same shots (Falcon takeoff, flight) contain **no** tessellated draw
+  and no 5142-index draw at all, and Xenia logs no failure for it: in Xenia the game never
+  issues these draws. They are not VIZ-predicated (token 0), the VIZ status register (0020)
+  and host occlusion queries don't change that, and Xenia runs with `occlusion_query_viz =
+  false`. So the game's own logic takes another path in our build; which input decides it is
+  still open (a candidate is a value the game reads back from GPU-written memory).
   pixel shader replaced) instead of hanging the GPU again.
 - The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
   `d3d12_render_target_cache.cc`) before Windows builds.

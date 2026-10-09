@@ -1,0 +1,19 @@
+--- a/src/graphics/command_processor.cpp
++++ b/src/graphics/command_processor.cpp
+@@ -1600,13 +1600,9 @@
+     // end the viz query
+     WriteRegister(XE_GPU_REG_VGT_EVENT_INITIATOR, VIZQUERY_END);
+     REXGPU_INFO("End viz query ID {:02X}", id);
+-    // The scan converter writes the internal result back to the register here.
+-    // We just fake it and say it was visible in case it is read back.
+-    if (id < 32) {
+-      register_file_->values[XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_0] |= uint32_t(1) << id;
+-    } else {
+-      register_file_->values[XE_GPU_REG_PA_SC_VIZ_QUERY_STATUS_1] |= uint32_t(1) << (id - 32);
+-    }
++    // The scan converter writes the internal result back to
++    // PA_SC_VIZ_QUERY_STATUS here. Leave it untouched as Xenia does rather than
++    // faking every query as visible (the bits were never cleared again).
+   }
+ 
+   return true;
