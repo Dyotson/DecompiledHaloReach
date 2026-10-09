@@ -97,7 +97,12 @@ Check exact param names in `endpoints.json` before calling.
   patches that change every frame. Traced to the lighting buffer texture (`k_2_10_10_10_AS_16_16_16_16`
   at 0x02354000) that an EDRAM resolve fills; it contains garbage in our build. Two more SDK porting bugs
   found by diffing against Xenia and patched (stacked-texture layer lerp, missing layer clamp), but they
-  are not the red-patch cause.
+  are not the red-patch cause. Patch 0004: the SDK hosted `k_2_10_10_10` render targets (Reach's HDR
+  lighting) as 8-bit `A8B8G8R8` instead of Xenia's `A2B10G10R10`; fixed, red patches remain.
+- Xenia can now be driven in-game with `tools/virtual_pad.py` (virtual Xbox 360 pad over /dev/uinput),
+  but its campaign needs a Xenia profile (Profile > Create Profile, once). Don't automate the mouse
+  for that: ydotool's absolute moves land at (0,0) on this KDE session and hit other windows.
+  `renderdoccmd capture` under `timeout` leaves the captured child running; kill it afterwards.
 
 ## Debugging recipes
 
