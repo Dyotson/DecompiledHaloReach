@@ -94,6 +94,8 @@ for build in "$ROOT"/reach-recomp/out/build/*/; do
     sdk_dir="$(sed -n 's/^rexglue_DIR:PATH=//p' "$build/CMakeCache.txt" 2>/dev/null)"
     case "$sdk_dir" in
         "$NIGHTLY"/*|"$OVERLAY"/*)
+            # rm first: running instances may have the old file mapped.
+            rm -f "$build/librexgpu-xenos.so"
             cp "$OVERLAY/lib/librexgpu-xenos.so" "$build/librexgpu-xenos.so"
             echo "staged into $build" ;;
     esac
