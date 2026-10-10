@@ -518,7 +518,7 @@ name, and of two uploads with the same name the newest wins. Each game names a g
 a map (by its name in `maps/info`); the map variant is the map's default one, which the
 generator builds, unless `"map_variant"` names a Forge map uploaded to the File Share.
 Games whose files are missing are left out with a warning, and playlists without games.
-Clients pick up new files when they restart.
+Category ids must be 0-15. Clients pick up new files when they restart.
 
 **Status (two instances on one machine, one server): working.** Both press START
 MATCHMAKING; within about 15-60 s they find each other, merge, pass arbitration and host
@@ -533,11 +533,8 @@ playlist that picked Oddball on Zealot and then King of the Hill on Sword Base.
 Open:
 - More than two players (needs a third instance, about 26 GB free on this machine).
 - Arena (only the season reply exists).
-- The Playlist screen draws no names: the list has its entries (DOWN moves through them, the
-  details panel changes) but no text, so in tests the playlist was chosen by restarting
-  with a `playlists.json` whose first playlist is the one wanted (the lobby falls back to it
-  when the remembered one is gone). The lobby itself shows the selected playlist's name
-  (`hopper_name`, 0x826ECD20). Not investigated further.
+- The Playlist screen shows no player counts ("CURRENT PLAYERS") and no playlist images
+  (`%05u/images/hopper.jpg`); `dynamic_pres_hopper_statistics.bin` is not served.
 - Once, after leaving the Matchmaking lobby (with a second instance in the same party),
   opening Custom Game made the game fault in a loop (null read on one thread). Leaving the
   lobby and opening Custom Game alone did not reproduce it.
@@ -676,6 +673,22 @@ served as its saved `mvar` chunk. Map ids come from the operator's `maps/info/*.
 (`levl` v7: u32 map id at +0, English name at +8): Sword Base 1000, Countdown 1020,
 Boardwalk 1035, Zealot 1040, Powerhouse 1055, Boneyard 1080, Reflection 1150, Spire 1200,
 Forge World 3006.
+
+#### The Playlist screen
+
+The lobby (`sub_8227D688`) turns the hopper table into the "matchmaking-hopper-list" session
+parameter: the categories {u16 id, name}, and per hopper a 0x34-byte entry {u16 id, u16
+category (+0x36), u8 +0x38, u8 +0x44, u32 +0x3C, u8 visible (`sub_8228F938`), u8 joinable,
+u8 +0x384, u8 +0x39, char name[32]}. While doing so it sets bit (+0x38) of a 16-bit mask
+(+0xC of the parameter) for every visible hopper. The Playlist screen lists the categories
+whose bit is set (`sub_826F4ED0`) and, for a category, the hoppers whose category field
+equals the bit number (`sub_826F52A8`, `sub_82792C18`, which also takes the description
+from `matchmaking_hopper_descriptions` and the player count from the hopper statistics).
+So hopper +0x38 must hold the category id, and category ids must be 0-15. With +0x38 left
+at 0 and the category id 1, the screen had one unnamed category and no playlists, though
+the lobby showed the selected playlist (it reads the entry by id). The generator now sets
++0x38: the screen lists "Reach Live" with its playlists, shows the highlighted one's
+description, and selecting one changes the lobby's playlist.
 
 #### "The Halo: Reach server is unavailable"
 

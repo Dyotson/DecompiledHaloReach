@@ -134,6 +134,11 @@ def hopper_table(categories, hoppers):
         t[o:o + len(name)] = name
         t[o + 0x20:o + 0x34] = h.get("game_set_hash", bytes(20))
         struct.pack_into(">HH", t, o + 0x34, h["id"], h["category"])
+        # The Playlist screen lists the categories whose bit (1 << +0x38) is set in the
+        # hopper list the lobby builds (sub_8227D688), then the hoppers whose category
+        # (+0x36) is that bit's number (sub_826F4ED0, sub_826F52A8): +0x38 must be the
+        # category id too, or the screen shows nothing.
+        t[o + 0x38] = h["category"]
         # Player requirements (sub_82290EA8): none. Experience, games played and rank
         # ranges, access bit -1 = none, account type 2 = any.
         struct.pack_into(">iiiiii", t, o + 0x58, 0, 0, 0, 0, -128, 127)
@@ -387,6 +392,9 @@ def build(salt, signatures, network_configuration, playlists, variants, maps):
     # `netc` v241, raw. The lobby reports the server unavailable while it is missing.
     files["network_configuration_241.bin"] = blf(chunk(b"netc", 241, 1, network_configuration))
     hoppers = [dict(h) for h in playlists["playlists"]]
+    for c in playlists["categories"]:
+        if not 0 <= c["id"] < 16:  # the Playlist screen keeps categories in a 16-bit mask
+            raise SystemExit("category %r: the id must be 0-15" % c["name"])
     for h in hoppers:
         h["variant_source"] = GAME_AND_MAP_VARIANT
         entries = []
