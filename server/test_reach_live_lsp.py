@@ -10,6 +10,7 @@ import sys
 import tempfile
 import types
 import unittest
+import zlib
 
 sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
 import reach_live_lsp as lsp  # noqa: E402
@@ -97,6 +98,84 @@ class LspTest(unittest.TestCase):
             f.write(b"operator file")
         self.assertEqual(lsp.handle(None, "GET", path, {}, b"", None)[2], b"operator file")
         self.assertEqual(lsp.handle(None, "GET", "/storage/../../etc/passwd", {}, b"", None)[0], 404)
+
+
+def variant_file(name, file_type=5, map_id=1000, author=b"Noble Six", compress=False):
+    """A synthetic content file: `_blf`, `chdr` (u16 build, u16, 0x2B0 metadata), data."""
+    md = bytearray(0x2B0)
+    md[0] = file_type
+    struct.pack_into(">QI", md, 8, 0x1122334455667788, 0)
+    struct.pack_into(">i", md, 0x2C, map_id)
+    md[0x48:0x48 + len(author)] = author        # creator
+    md[0x6C:0x6C + len(author)] = author        # last modified by
+    md[0x80:0x80 + 2 * len(name)] = name.encode("utf-16-be")
+    inner = lsp.chunk(b"chdr", 10, 2, struct.pack(">HH", 11860, 0) + bytes(md)) + \
+        lsp.chunk(b"mvar", 31, 1, bytes(64))
+    if compress:
+        inner = lsp.chunk(b"_cmp", 1, 1, b"\0" + struct.pack(">I", len(inner)) +
+                          zlib.compress(inner))
+    return lsp.blf(inner)
+
+
+class FileShareTest(unittest.TestCase):
+    def setUp(self):
+        self.dir = tempfile.TemporaryDirectory()
+        lsp.configure(types.SimpleNamespace(data_dir=self.dir.name, dump_requests=False))
+        self.ids = "machineId=fa00000000000001&userId=0009000000000001&shareId=0009000000000001"
+
+    def tearDown(self):
+        self.dir.cleanup()
+
+    def get(self, path):
+        return lsp.handle(None, "GET", path, {}, b"", ("127.0.0.1", 1))
+
+    def upload(self, data):
+        status, _, reply = self.get("/gameapi_omaha/FilesNewUpload.ashx?&%s&uniqueId=1122334455667788"
+                                    "&fileType=5&uncompressedSize=%d&compressedSize=%d"
+                                    % (self.ids, len(data), len(data)))
+        self.assertEqual(status, 200)
+        server_id = int(reply, 16)
+        headers = {"machineid": '"fa00000000000001"', "userid": '"0009000000000001"',
+                   "shareid": '"0009000000000001"', "serverid": '"%x"' % server_id}
+        body = BOUNDARY + b'\r\nContent-Disposition: form-data; name="upload"; ' \
+            b'filename="blob"\r\nContent-Type: application/octet-stream\r\n\r\n' + data + \
+            b"\r\n" + BOUNDARY + b"--\r\n"
+        status, _, _ = lsp.handle(None, "POST", "/gameapi_omaha/FilesUpload.ashx", headers, body,
+                                  None)
+        self.assertEqual(status, 200)
+        return server_id
+
+    def items(self, reply):
+        major, _, payload = lsp.chunks(reply[2])[b"fitm"]
+        self.assertEqual(major, 4)
+        count = struct.unpack_from(">H", payload, 0x22)[0]
+        return [payload[0x28 + i * 0x29C:0x28 + (i + 1) * 0x29C] for i in range(count)]
+
+    def test_upload_list_search_download(self):
+        data = variant_file("Pit Stop", compress=True)
+        server_id = self.upload(data)
+        items = self.items(self.get("/gameapi_omaha/FilesGetCatalog.ashx?&%s&locale=en" % self.ids))
+        self.assertEqual(len(items), 1)
+        item = items[0]
+        self.assertEqual(struct.unpack_from(">Q", item, 0)[0], server_id)
+        self.assertEqual(item[8], 5)                                   # map variant
+        self.assertEqual(struct.unpack_from(">i", item, 0x14)[0], 1000)
+        self.assertEqual(item[0x68:0x78].decode("utf-16-be"), "Pit Stop")
+        found = self.items(self.get("/gameapi_omaha/FilesGetSearch.ashx?&%s&fileType=5"
+                                    "&gamertag=noble%%20six&page=0" % self.ids))
+        self.assertEqual(len(found), 1)
+        self.assertEqual(self.items(self.get("/gameapi_omaha/FilesGetSearch.ashx?&%s&fileType=6"
+                                             % self.ids)), [])
+        status, _, body = self.get("/gameapi_omaha/FilesStageForDownload.ashx?&%s&serverId=%x"
+                                   "&startPosition=0&fromAutoQueue=0&preview=0"
+                                   % (self.ids, server_id))
+        lines = dict(line.split(": ", 1) for line in body.decode().strip().split("\r\n"))
+        self.assertEqual((status, int(lines["Size"]), int(lines["FullSize"])),
+                         (200, len(data), len(data)))
+        status, _, body = self.get(lines["InitialUrl"])
+        self.assertEqual((status, body), (200, data))
+        self.get("/gameapi_omaha/FilesDelete.ashx?&%s&serverId=%x" % (self.ids, server_id))
+        self.assertEqual(self.items(self.get("/gameapi_omaha/FilesGetCatalog.ashx?&%s" % self.ids)), [])
 
 
 if __name__ == "__main__":

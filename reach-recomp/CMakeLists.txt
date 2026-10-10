@@ -20,6 +20,7 @@ set(REACH_SOURCES
     src/hooks/offline_challenges.cpp
     src/hooks/switch_tailcalls.cpp
     src/kernel/file_delete_on_close.cpp
+    src/kernel/file_size_refresh.cpp
     src/kernel/identity.cpp
     src/kernel/input_autopress.cpp
     src/kernel/live_xmsg.cpp

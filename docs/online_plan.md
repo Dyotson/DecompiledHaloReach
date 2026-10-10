@@ -436,3 +436,48 @@ friends, per local user at `*0x8315107C`, count at +0x7C; type 2: Xbox LIVE part
 `*0x83151040` + 0x1E18, 0x78-byte XPARTY_USER_INFO). The `XFriendsCreateEnumerator` task at
 0x82A9666C (started by `Function_822688D8` on the Guide's gamercard notification 0x06010004)
 is the Guide's "join from gamercard" path, not the roster.
+
+### 5.3 File Share
+
+Each player's File Share lives on the Reach Live server (`server/reach_live_files.py`,
+files and an `index.json` per player under `DATA_DIR/fileshare/<XUID>/`; 24 slots and 100 MB
+each). Verified with two instances: Lsp Tester uploaded a Forge map variant from Forge's
+map browser (Local Files, X "File Options", "Upload to File Share": "Upload complete"); Kat
+opened Lsp Tester's File Share from the Xbox LIVE roster (player menu, "File Share"), saw
+the map with its name, description, author, date and size, and downloaded it ("Download
+complete"); the package in Kat's local storage is byte-identical to the original save. The
+listings and files are unsigned (`_eof` authentication 0), so no client-side relaxation
+was needed.
+
+Requests (`machineId`, `userId` and `shareId` are on every one; ids are hex):
+
+| Request | Reply |
+| --- | --- |
+| `GET FilesGetCatalog.ashx?shareId&locale` (a player's share) | BLF `fitm` v4: 0x28-byte header (+0 u64 share, +8 owner gamertag char[16], +0x1C u32 quota in bytes, +0x20 u8 slot count, +0x22 u16 item count, +0x24 u8 length of a UTF-16 notice after the items), then items of 0x29C bytes. The UI reads the header in `sub_827CCE78`: slots free = slots − items, bytes used = Σ item size |
+| `GET FilesGetCatalogInfo.ashx?shareIDs=a,b,…` | BLF `finf` v1: u16 count, u16, then a 0x24-byte record per share. The record does not feed the slot or space figures; its layout is not mapped (the server sends per-type counts) |
+| `GET FilesNewUpload.ashx?uniqueId&fileType&uncompressedSize&compressedSize` | plain text: the server's id for the upload, hex (`strtoull(…, 16)`) |
+| `POST FilesUpload.ashx` (multipart, part `upload` = the file; HTTP headers `machineid`, `userid`, `shareid`, `serverid` with quoted values, `startposition` on resume) | 200; the body is not read. The file is the game's BLF: `_blf`, `chdr` (uncompressed), `_cmp` (zlib, window bits 15), `_eof`, padded to whole 4 KB pages |
+| `GET FilesGetUploadProgress.ashx?serverId` | bytes received, hex (resume) |
+| `GET FilesGetDetails.ashx?serverId` | `fitm` v4 with one item and its extra data (u8 tag count at item +9, u32 extra size at item +0x298: none here) |
+| `GET FilesStageForDownload.ashx?serverId&startPosition&fromAutoQueue&preview` | text lines `Size: n`, `FullSize: n` (both non-zero) and `InitialUrl: path` (`sub_8236D380`); the client then GETs `InitialUrl` from the same server (headers `machineId`, `serverId`, `userID`, `shareID`) and stores the bytes. `FilesResumeDownload.ashx` continues it |
+| `GET FilesGetSearch.ashx` / `FilesGetSearchCount.ashx` (`fileType`, `gamertag` or `authortaghex`, `mapId`, `gameEngine`, `megaloCategoryIndex`, `fileAge`, `sortBy`, `taghex`, `page`) | `fitm` v4 (50 items a page) / `finf` v1. Implemented over every share (file type, author, map), not exercised in game yet |
+| `GET FilesDelete.ashx?serverId` | 200 |
+
+Item (0x298 bytes) = the file's content header with its first ids reordered: the content
+header is the `chdr` payload after u16 build and u16 (0x2B0 bytes: +0 u8 file type, +4 u32
+size, +8 u64 unique id, +0x10/+0x18/+0x20 parent, root and game ids, +0x28 activity, mode,
++0x2C i32 map id, +0x38 and +0x5C creator / modifier {u64 time, u64 XUID, char[16] name, u8
+online}, +0x80 wchar name[128], +0x180 wchar description[128], …), and the item is
+`header[8:0x10] + header[0:8] + header[0x28:]` (unique id first; parent, root and game ids
+dropped). The server replaces the unique id with its own file id. File types seen: 2
+screenshot, 3 film, 5 map variant, 6 game variant.
+
+Runtime fix found on the way (`src/kernel/file_size_refresh.cpp`): the SDK caches each
+host file's size and NtWriteFile does not refresh it, so after writing a download in 4 KB
+pieces the game's attribute query saw 4096 of 8192 bytes, a chunk ran past the end and
+the transfer failed. The override refreshes the size after writes that extend a file.
+
+Not done: tags, recommendations, predefined queries (`fpre`) and megalo categories
+(`fmca`), screenshot previews, the per-type counters next to a share (they stay 0), and
+the service record (`UserGetServiceRecord.ashx` returns an empty `srid` v7 chunk of 0xD48
+bytes, read straight into the game's buffer; not checked in game).

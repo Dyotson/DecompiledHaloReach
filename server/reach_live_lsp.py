@@ -14,6 +14,8 @@ What is answered (docs/online_plan.md section 5.1, docs/progression_re.md sectio
   Armory flags and never lowers them, so a reinstalled game gets its progression back.
 - POST /ReachPresenceApi/heartbeat.ashx (`phbt` v5): `phbr` v2 reply with no reservations.
 - POST /ReachPresenceApi/query.ashx (`preq` v3): `pplr` v5 reply with no records.
+- /gameapi_omaha/Files*.ashx: File Share (reach_live_files.py).
+- UserGetServiceRecord.ashx: an empty service record.
 - Everything else (title/user/machine storage, Arena, stats uploads): 404, which the game
   treats as "file not there" or "service unavailable". Files an operator puts under
   DATA_DIR/storage/<request path> are served as they are.
@@ -25,6 +27,8 @@ import os
 import struct
 import time
 import urllib.parse
+
+import reach_live_files as files
 
 log = logging.getLogger("reach-live")
 
@@ -46,6 +50,7 @@ def configure(args):
     DATA_DIR = args.data_dir
     DUMP = args.dump_requests
     os.makedirs(os.path.join(DATA_DIR, "players"), exist_ok=True)
+    files.configure(DATA_DIR)
 
 
 # --- BLF files ---------------------------------------------------------------------
@@ -184,6 +189,18 @@ def presence_query(body):
     return 200, "application/octet-stream", blf(chunk(b"pplr", 5, 1, bytes(0x1094)))
 
 
+# --- Service record ------------------------------------------------------------------
+
+SRID_SIZE = 0xD48
+
+
+def service_record(query):
+    """UserGetServiceRecord: the game reads the reply straight into a 0xD48-byte `srid`
+    v7.1 chunk (no BLF wrapper). Bungie filled it from uploaded game results; this server
+    has none, so the record is empty."""
+    return 200, "application/octet-stream", chunk(b"srid", 7, 1, bytes(SRID_SIZE - 12))
+
+
 # --- Dispatch ------------------------------------------------------------------------
 
 def dump(method, path, headers, body):
@@ -223,6 +240,12 @@ def handle(server, method, path, headers, body, peer):
         return heartbeat(body)
     if route == "/reachpresenceapi/query.ashx" and method == "POST":
         return presence_query(body)
+    if route == "/gameapi_omaha/usergetservicerecord.ashx":
+        return service_record(query)
+    if route.startswith("/gameapi_omaha/files"):
+        reply = files.handle(method, route, query, body, blf, chunk, upload, headers)
+        if reply is not None:
+            return reply
     if route.startswith("/storage/") and method == "GET":
         data = stored_file(url.path)
         if data is not None:
