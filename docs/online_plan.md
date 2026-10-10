@@ -533,6 +533,12 @@ playlist that picked Oddball on Zealot and then King of the Hill on Sword Base.
 Open:
 - More than two players (needs a third instance, about 26 GB free on this machine).
 - Arena (only the season reply exists).
+- Next steps: serve `dynamic_pres_hopper_statistics.bin` with player counts from the
+  server's presence (decoded at 0x833968D4: total, then {u8 type 2, i16 hopper id, i32
+  count} entries; format of the file not traced yet); optional `%05u/images/hopper.jpg`
+  from the operator; a third instance for 3+ player matches; if the Custom Game fault loop
+  returns, catch it with gdb (`handle SIGSEGV stop`, filter si_addr = guest 0) and read
+  the guest backtrace.
 - The Playlist screen shows no player counts ("CURRENT PLAYERS") and no playlist images
   (`%05u/images/hopper.jpg`); `dynamic_pres_hopper_statistics.bin` is not served.
 - Once (2026-10-10, with a second instance on the same server), leaving the Matchmaking
