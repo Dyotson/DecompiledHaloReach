@@ -19,6 +19,7 @@ set(REACH_SOURCES
     src/hooks/mouse_look.cpp
     src/hooks/offline_challenges.cpp
     src/hooks/switch_tailcalls.cpp
+    src/kernel/critical_section.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/file_size_refresh.cpp
     src/kernel/identity.cpp

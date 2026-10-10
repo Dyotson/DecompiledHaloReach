@@ -311,15 +311,29 @@ default, `REACH_OFFLINE_CHALLENGES=0` turns it off):
   the pending mask 0x8373FB18, applied by 0x824BCA08: max(local, saved), 0x7FFFFFFF =
   completed without a second award).
 - **Verified:** the CHALLENGES item is enabled with a "new" star, the list shows the four
-  dailies and the weekly with names, descriptions, cR and progress bars; in a campaign
-  mission and a local Firefight game the active entries are marked applicable
-  (entry+0x10). **Not yet verified:** progress actually counting and a completion paying
-  out (scripted input could not get kills).
+  dailies and the weekly with names, descriptions, cR and progress bars. In a local Firefight
+  game, real kills raised "Kill (To Reach the End)" (kill 50 enemies in a Firefight game) by
+  one each, progress survived a restart, and completing it paid its 500 cR (5396 → 5896).
+- **How progress counts** (traced with gdb counters and Ghidra):
+  - **Incidents:** a kill or other game event goes through the incident system
+    `0x825D7F88`. Each incident's reactions come from a tag table (`Function_824E7BD0`),
+    filtered by `0x821DBB88` (game mode, networked flag at globals+0xFA60, team).
+  - **Challenge ids:** a reaction can list challenge ids. For each one, `0x825D7EB0`
+    calls `0x824BCC80(controller, id)`, which is gated on game globals+0x1E5A8 and the
+    controller being attached (0x8373FB10).
+  - **Progress:** `0x824BC820` raises every active entry whose definition id (first word,
+    entry+0x2C) matches. It goes through our "synced" gate (0x824BC85C), and a completion
+    calls `Challenges_OnChallengeCompleted` (0x824BC138).
+  - **The event-mask path is unused:** `0x824BCBC8`, called about 30 times a second,
+    only forwards events matching entry+0x58 (definition+0x2C). That field is 0 in every
+    definition, so it never fires.
 - **Debug:** `REACH_CHALLENGE_DUMP=1` logs every definition; `REACH_CHALLENGE_PICK=
-  "cat:idx,...[;cat:idx]"` forces the picks. Forcing a non-weekly category into the weekly
+  "cat:idx,...[;cat:idx]"` forces the picks; `REACH_CHALLENGE_TEST_EVENT=<hex id>[:n]`
+  sends a challenge event n times every 10 s, as an incident would (e.g. `D3D8:20`). Forcing a non-weekly category into the weekly
   set made the next map load fault endlessly (null read on the loader thread): the weekly
   set must hold category 1 entries.
-- Definition fields (0x50): +0x14 target, +0x18 cR, +0x2C event mask, +0x30 modes (1
+- Definition fields (0x50): +0x00 challenge id (incidents name it), +0x14 target, +0x18 cR,
+  +0x2C event mask (unused, 0), +0x30 modes (1
   campaign, 2 Firefight, 4 multiplayer), +0x31 matchmaking bits (1 outside, 2 inside), +0x32
   campaign difficulty mask, +0x34 map (0 = any), +0x40 parameter.
 

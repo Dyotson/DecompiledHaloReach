@@ -129,3 +129,25 @@ Open GPU issues in the campaign (Winter Contingency):
 - The SDK's D3D12 backend needs the same midpoint decode (Xenia has it in
   `d3d12_render_target_cache.cc`) before Windows builds, and its DXBC translator the W = 0
   handling of 0021.
+
+## Runtime fixes outside the patches
+
+`librexruntime.so` is not rebuilt, so kernel and XAM fixes are `__imp__` overrides in
+`reach-recomp/src/kernel/` (they forward to the SDK through `dlsym(RTLD_NEXT)` where they
+only adjust it):
+
+- **Critical sections** (`critical_section.cpp`): a solo Firefight game froze after four
+  minutes. The main thread waited forever in `RtlEnterCriticalSection` on one of the
+  game's named locks (table 0x8394DFD0, entry 14), which nobody held: lock count 0, no
+  owner. The SDK, like Xenia, hands the lock over through the auto-reset event in the
+  critical section's dispatcher header. The runtime binds that event to a host object by a
+  handle it writes into the header itself (`wait_list_blink`). Here the same handle
+  (0xF8000250) was also in a heap object at 0x30655018, so two guest objects shared one host
+  event and the release's signal never reached the waiter. Contended waiters now block on a
+  host semaphore keyed by the critical section's address; the guest-visible fields keep their
+  meaning. Firefight then ran 10+ minutes several times without freezing.
+  `REACH_SDK_CRITICAL_SECTIONS=1` restores the SDK's version.
+- `XamEnumerate` completion codes (`xam_enumerate.cpp`), headless `XamShowKeyboardUI`
+  (`xam_keyboard.cpp`), files marked delete-on-close (`file_delete_on_close.cpp`), file size
+  after writes (`file_size_refresh.cpp`), Winsock TCP (`live_tcp.cpp`) and the Xbox LIVE
+  messages (`live_xmsg.cpp`): see the comments at the top of each file.

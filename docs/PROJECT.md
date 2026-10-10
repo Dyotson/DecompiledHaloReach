@@ -222,6 +222,14 @@ Check exact param names in `endpoints.json` before calling.
   - Keyboard and mouse with direct mouse look (`docs/input.md`).
   - SDK patch 0020 also moves the viz-query logs to debug level (1000+ lines a second).
 
+- 2026-10-09 (night, later): **challenges verified, a freeze fixed, File Share.**
+  - Offline challenges count real kills and pay out on completion (`docs/progression_re.md` 4.1).
+  - A Firefight freeze was a lost wakeup in the SDK's critical sections (a guest event
+    header shared by two objects); `src/kernel/critical_section.cpp` replaces them
+    (`docs/sdk_patches.md`, "Runtime fixes").
+  - File Share through Reach Live: upload from Forge, browse a friend's share from the
+    roster, download (`docs/online_plan.md` 5.3).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

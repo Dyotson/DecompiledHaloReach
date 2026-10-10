@@ -51,6 +51,7 @@ static_assert(offsetof(PPCContext, r3) == 0, "hooks recover ctx from &ctx.r3");
 
 REX_EXTERN(sub_824BBF98);  // Challenges_ApplyDchaChunk(ctrl, chunk)
 REX_EXTERN(sub_8258E2D0);  // challenge definition (category, index) or 0
+REX_EXTERN(sub_825D7EB0);  // challenge event for a player (or -1: all), as incidents send
 
 namespace {
 
@@ -348,6 +349,22 @@ void ReachChallengeTick(PPCRegister& r3) {
   for (uint32_t set : {daily_set, weekly_set}) {
     uint32_t count = std::min<uint32_t>(Load32(base + set + 0x10), kMaxEntries);
     for (uint32_t i = 0; i < count; ++i) base[set + 0x14 + i * kEntryStride + 0x2C + 0x31] |= 1;
+  }
+
+  // Debug: REACH_CHALLENGE_TEST_EVENT=<hex id>[:count] sends that challenge event (a definition's
+  // first word, e.g. D3D8 = "kill 50 enemies in a Firefight game") for every player every
+  // 10 s, the way the incident system (0x825D7F88) does for a kill, to test the counting
+  // path without having to score kills.
+  if (const char* v = std::getenv("REACH_CHALLENGE_TEST_EVENT"); v && *v) {
+    static auto last_event = std::chrono::steady_clock::now();
+    if (std::chrono::steady_clock::now() - last_event >= std::chrono::seconds(10)) {
+      last_event = std::chrono::steady_clock::now();
+      char* rest = nullptr;
+      const uint32_t id = uint32_t(std::strtoul(v, &rest, 16));
+      const int count = rest && *rest == ':' ? std::max(1, std::atoi(rest + 1)) : 1;
+      for (int i = 0; i < count; ++i) CallGuest(ctx, base, sub_825D7EB0, 0xFFFFFFFF, id);
+      REXLOG_INFO("Offline challenges: test event {:08X} sent {} times", id, count);
+    }
   }
 
   // Save progress when it changes; never below what was saved, and not while the saved
