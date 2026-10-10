@@ -247,6 +247,26 @@ Check exact param names in `endpoints.json` before calling.
   - The README has requirements, Linux and Windows build steps, playing, running a Reach Live
     server (Python or Docker; checked with podman) and troubleshooting.
 
+- 2026-10-10: **Release builds in CI, private.** The private codegen repo
+  (`DecompiledHaloReach-generated`) has `.github/workflows/release.yml` (Actions → Release →
+  Run workflow, or push a `v*` tag there). It checks out this repo at the commit the private
+  README records, copies the generated code in, builds Linux on ubuntu-22.04 (glibc 2.35 floor;
+  Homebrew clang 23 against GCC 13's libstdc++, as the SDK nightly) and Windows (the
+  `tools/build_windows.sh` cross build; xwin splats the MSVC CRT in CI), and publishes
+  `RecompiledHaloReach-linux-x64.tar.gz`, `RecompiledHaloReach-windows-x64.zip` and checksums
+  as a release of that private repo. The binaries contain translated game code: never attach
+  them to this repo. It refuses a commit whose manifest or hints differ from the ones the code
+  was generated with: after changing hints, regenerate and run `tools/sync_generated_repo.sh`.
+  - Pieces here: `-DREACH_SKIP_CODEGEN=ON` (compile a supplied `generated/`),
+    `tools/package_linux.sh` (flat package with `play.sh DATA_DIR`), `tools/build_rexglue_sdk.sh
+    --source-only`.
+  - Cost: first run about 55 runner minutes (Windows SDK 15 min, Windows game 8-16 min, Linux
+    plugin 5 min, Linux game 7-15 min; GitHub's 2-vCPU runners vary 2x). With the SDK trees,
+    the xwin splat and ccache (PCH-aware, depend mode) cached, a release whose generated code
+    is unchanged takes about 9 minutes.
+  - The game rejects an option given twice (CLI11), so wrappers must not add `--log_file` when
+    the caller passes one.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
