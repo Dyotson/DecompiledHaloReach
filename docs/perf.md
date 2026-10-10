@@ -135,6 +135,10 @@ GPU's busy percentage.
 | 2026-10-10 | c7cccb2 | menu | cold | FIFO | 30.0 | 33.6 | 33.7 | 33.8 | 34.0 | 29.6 | 0 | 0 | 100.0 | 0 | 144 | 184 | 21 |
 | 2026-10-10 | c7cccb2 | gameplay (SWAT, Sword Base) | warm | IMMEDIATE | 30.0 | 33.6 | 33.7 | 33.8 | 34.2 | 29.5 | 0 | 0 | 100.0 | 6 | 3348 | 206 | 55 |
 | 2026-10-10 | c7cccb2 | gameplay (SWAT, Sword Base) | warm | FIFO | 30.0 | 33.6 | 33.7 | 33.8 | 33.8 | 29.6 | 0 | 0 | 100.0 | 2 | 144 | 152 | 32 |
+| 2026-10-10 | cb092d4 | menu | warm | FIFO | 30.0 | 33.6 | 33.7 | 33.8 | 66.3 | 26.7 | 0 | 0 | 99.9 | 1 | 30 | 175 | 23 |
+| 2026-10-10 | cb092d4 | menu | warm | IMMEDIATE | 30.0 | 33.6 | 33.7 | 33.8 | 33.8 | 29.6 | 0 | 0 | 100.0 | 0 | 30 | 175 | 23 |
+| 2026-10-10 | cb092d4 | gameplay (SWAT, Sword Base) | warm | FIFO | 30.0 | 33.6 | 33.7 | 33.8 | 34.1 | 29.5 | 0 | 0 | 100.0 | 2 | 30 | 149 | 38 |
+| 2026-10-10 | cb092d4 | gameplay (SWAT, Sword Base) | cold | FIFO | 29.9 | 33.6 | 33.7 | 34.0 | 62.7 | 24.1 | 0 | 0 | 99.6 | 31 | 30 | 152 | 37 |
 
 - The game itself keeps 30.0 fps in every mode on an idle machine. Vsync costs it nothing;
   dropping the nonstop repaints frees about a quarter of the GPU and 0.5-0.6 of a CPU core.
@@ -143,9 +147,11 @@ GPU's busy percentage.
   first frame. The cold run compiles 147 pipelines in the first 10 s of frames (the intro
   and title screen; the worst frame took 642 ms) and 13 more in the next 10 s (67 ms); by the
   main menu nothing is left to compile.
-- These runs predate the repaint fix (commit after `e2ff973`). With it, functional runs show
-  30 presents a second on the main menu with FIFO and with IMMEDIATE, and the game still at
-  30.0 fps; clean numbers for it are still to be taken.
+- `cb092d4` (the repaint fix): one present per guest frame in every mode. IMMEDIATE on the
+  main menu went from 3937 presents a second and 44% GPU to 30 and 23%, the same as FIFO.
+  The cold SWAT run compiled 31 pipelines in the window, with one 233 ms present hitch.
+- At a 120 Hz guest vblank (the limiter's 60 fps target) the menu ran 45.6 fps and the game
+  45.1 fps, both at a flat ~22 ms per frame: see `docs/framerate.md`.
 - Runs made earlier on a busy machine (two more Reach instances, each repainting nonstop) are
   not in the table: there the windowed FIFO and MAILBOX runs got only 12-20 presents a second
   in gameplay, because the compositor itself was starved of GPU time.

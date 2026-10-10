@@ -18,7 +18,8 @@
 # BENCH_LOCK=<file> (with BENCH_OWNER=<name>): a shared machine's lock for clean
 # measurements ("owner expiry-epoch purpose"); the run refuses to start while someone else
 # holds it. While it holds the lock, it waits for other games to finish before the launch and
-# again before measuring (BENCH_WAIT seconds at most, default 1500).
+# again before measuring (BENCH_WAIT seconds at most, default 1500), and for the load
+# average to settle below 2 before the launch.
 # Prints the guest and present summary lines (covering only the measured time), the game's
 # CPU use and the GPU's load (AMD) over that time, and the paths. Needs 10 GB of available
 # memory.
@@ -109,6 +110,10 @@ fi
 
 rm -f "$DIR/frames.csv" "$DIR/perf.reset" "$DIR"/step_*.png "$DIR/machine.txt"
 wait_alone "${BENCH_WAIT:-1500}"
+# The 1-minute load average lags: let it settle after other games (up to 4 minutes).
+if holds_lock; then
+    for _ in $(seq 1 240); do awk '{ exit !($1 < 2) }' /proc/loadavg && break; sleep 1; done
+fi
 snapshot "before launch" > /dev/null
 load_before=$(cut -d' ' -f1 /proc/loadavg)
 gpu_before=$(gpu_busy)
