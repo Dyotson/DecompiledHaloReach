@@ -15,6 +15,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAGIC = b"RLV1"
 HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD = 1, 2, 3, 4, 5, 6
+LIST, PEERS, PRESENCE = 11, 12, 13
 
 
 def free_port():
@@ -89,6 +90,33 @@ class ServerTest(unittest.TestCase):
         self.assertEqual(kind, FORWARD)
         self.assertEqual(struct.unpack_from(">I", body)[0], b_id)
         self.assertEqual(body[20:], b"reply")
+
+    def test_presence_in_roster(self):
+        a = Client(self.addr, b"Carter", 0x0009000000000011, room=b"r2")
+        b = Client(self.addr, b"Jun", 0x0009000000000012, room=b"r2")
+        a_id, b_id = a.hello(), b.hello()
+        session = bytes(range(0x3C))
+        a.send(PRESENCE, struct.pack(">I", 0x13) + session + bytes([5]) + b"lobby")
+        time.sleep(0.2)
+        b.send(LIST, b"")
+        kind, body = b.recv()
+        self.assertEqual(kind, PEERS)
+        total, first, count = struct.unpack_from(">HHH", body)
+        self.assertEqual((total, first, count), (2, 0, 2))
+        pos, seen = 6, {}
+        for _ in range(count):
+            pid, xuid, name_len = struct.unpack_from(">IQB", body, pos)
+            pos += 13
+            name = body[pos:pos + name_len]
+            pos += name_len
+            (state,) = struct.unpack_from(">I", body, pos)
+            info = body[pos + 4:pos + 4 + 0x3C]
+            pos += 4 + 0x3C
+            status = body[pos + 1:pos + 1 + body[pos]]
+            pos += 1 + body[pos]
+            seen[pid] = (name, state, info, status)
+        self.assertEqual(list(seen)[0], b_id)  # the asker first
+        self.assertEqual(seen[a_id], (b"Carter", 0x13, session, b"lobby"))
 
     def test_unregistered_sender_is_told(self):
         d = Client(self.addr, b"Delta", 0x0009000000000004)

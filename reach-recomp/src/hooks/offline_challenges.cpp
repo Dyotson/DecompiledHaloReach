@@ -16,6 +16,8 @@
 //   outside matchmaking. Progress is saved to
 //   $XDG_DATA_HOME/reach/4D53085B/challenges_<xuid>.bin (default ~/.local/share) and
 //   given back to the game after a restart as a `chpr` chunk, as the server would.
+//   The same tick lifts the offline Credits cap to the online one (it only applies to
+//   profiles that have synced with a Reach Live title server).
 //
 // Days start at REACH_CHALLENGE_RESET_UTC_HOUR (default 10) UTC, weeks on Tuesdays.
 // Debugging: REACH_CHALLENGE_DUMP=1 logs every definition (category, index, target, cR,
@@ -60,6 +62,9 @@ constexpr uint32_t kSetsLoaded = 0x8373FAA0;      // u8
 constexpr uint32_t kEnabled = 0x8373FB10;         // u8 per controller
 constexpr uint32_t kSavedPending = 0x8373FB18;    // u8 mask: saved progress to apply
 constexpr uint32_t kSavedProgress = 0x8373FB19;   // chpr chunk, 100 bytes per controller
+
+constexpr uint32_t kOfflineCookieCap = 0x82BD45A8;  // network configuration, i32
+constexpr uint32_t kOnlineCookieCap = 0x82BD45AC;
 
 constexpr int kMaxEntries = 10;
 constexpr int32_t kCompleted = 0x7FFFFFFF;
@@ -311,9 +316,16 @@ void ReachChallengeUiSynced(PPCRegister& r3) {
 }
 
 void ReachChallengeTick(PPCRegister& r3) {
+  uint8_t* base = Base();
+  // Once a profile has synced with a title server (Reach Live), the game caps what it
+  // earns while unsynced at the network configuration's offline cap (default 1000 cR
+  // per sync period) instead of the online one (100000). Playing without the server is
+  // normal here, so the offline cap follows the online one.
+  if (Load32(base + kOfflineCookieCap) < Load32(base + kOnlineCookieCap)) {
+    Store32(base + kOfflineCookieCap, Load32(base + kOnlineCookieCap));
+  }
   if (!Enabled()) return;
   PPCContext& ctx = *reinterpret_cast<PPCContext*>(&r3);
-  uint8_t* base = Base();
   const uint32_t ctrl = r3.u32;
   if (ctrl > 3 || !base[kEnabled + ctrl]) return;
 

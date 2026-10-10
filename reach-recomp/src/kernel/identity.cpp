@@ -10,6 +10,7 @@
 
 #include "identity.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 
 #include <cctype>
@@ -18,9 +19,30 @@
 #include <random>
 #include <sstream>
 
+// Settings (reach.toml next to the executable, or the F4 settings overlay; they take
+// effect on the next start). The environment variables override them.
+REXCVAR_DEFINE_STRING(live_server, "", "Network/Reach Live",
+                      "Reach Live server, host[:port] (port 21100 by default). Empty: offline "
+                      "(REACH_SERVER overrides)");
+REXCVAR_DEFINE_BOOL(live_signin, false, "Network/Reach Live",
+                    "Sign in to Xbox LIVE through the Reach Live server: friends, Live lobbies "
+                    "(REACH_LIVE_SIGNIN overrides)");
+REXCVAR_DEFINE_STRING(live_room, "", "Network/Reach Live",
+                      "Only players in the same room on the server see each other "
+                      "(REACH_ROOM overrides)");
+REXCVAR_DEFINE_STRING(gamertag, "", "Network/Reach Live",
+                      "Your gamertag, 15 characters. Empty: the one in live_identity.txt "
+                      "(REACH_GAMERTAG overrides)");
+
 namespace reach {
 
 namespace {
+
+// An environment variable when set, else a setting.
+std::string EnvOr(const char* name, const std::string& setting) {
+  const char* v = std::getenv(name);
+  return v ? std::string(v) : setting;
+}
 
 struct Identity {
   uint64_t xuid = 0;
@@ -80,7 +102,10 @@ const Identity& Get() {
     Identity id;
     if (LiveMode()) id = LoadOrCreateLiveIdentity();
     if (const char* v = std::getenv("REACH_XUID"); v && *v) id.xuid = std::strtoull(v, nullptr, 16);
-    if (const char* v = std::getenv("REACH_GAMERTAG"); v && *v) id.gamertag = CleanGamertag(v);
+    if (std::string tag = CleanGamertag(EnvOr("REACH_GAMERTAG", REXCVAR_GET(gamertag)));
+        !tag.empty()) {
+      id.gamertag = tag;
+    }
     return id;
   }();
   return identity;
@@ -98,18 +123,23 @@ std::filesystem::path DataDir() {
   return std::filesystem::path(root) / "reach" / "4D53085B";
 }
 
-bool LiveMode() {
-  static const bool on = [] {
-    const char* v = std::getenv("REACH_SERVER");
-    return v && *v;
-  }();
-  return on;
+const std::string& LiveServerSpec() {
+  static const std::string spec = EnvOr("REACH_SERVER", REXCVAR_GET(live_server));
+  return spec;
 }
+
+const std::string& LiveRoom() {
+  static const std::string room = EnvOr("REACH_ROOM", REXCVAR_GET(live_room)).substr(0, 32);
+  return room;
+}
+
+bool LiveMode() { return !LiveServerSpec().empty(); }
 
 bool LiveSignin() {
   static const bool on = [] {
     const char* v = std::getenv("REACH_LIVE_SIGNIN");
-    return LiveMode() && v && *v && *v != '0';
+    const bool want = v ? (*v && *v != '0') : REXCVAR_GET(live_signin);
+    return LiveMode() && want;
   }();
   return on;
 }

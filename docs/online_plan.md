@@ -5,8 +5,10 @@ join the same System Link lobby and play a Firefight match together, on one mach
 (`REACH_NET=1`, the virtual network in section 4) and through a **Reach Live server**
 (section 5, `REACH_SERVER=host`): the server lists every connected player's System Link
 games in the game's own browser and connects players directly through UDP hole punching,
-or relays their traffic when that fails. Not yet tried: a full match to the postgame, host
-leaving / migration, Custom Games, more than two players, separate machines across real NATs.
+or relays their traffic when that fails. Host migration works: when the host's process is
+killed mid-match, the other player sees "Waiting for host…", becomes the host and the match
+goes on ("Noble Six quit"). Not yet tried: a full match to the postgame, Custom Games, more
+than two players, separate machines across real NATs.
 `tools/system_link_pair.sh` sets up a pair (with `REACH_SERVER` set, through a server).
 "Guess" marks statements not confirmed by code or a run.
 
@@ -339,3 +341,59 @@ System Link menus), so Live-only features (matchmaking playlists, Xbox Live part
 invites, file share, Bungie's challenges) are not available. Making the profile "signed in
 to Xbox Live" and answering the XSession / friends / presence / title storage requests from
 the server is the next layer.
+
+### 5.1 Title servers ("LSP")
+
+Bungie ran Reach's online services as Xbox Live title servers ("LSP"): HTTP/1.0 over TCP.
+With Live sign-in (`REACH_LIVE_SIGNIN=1`) the Reach Live server's HTTP port plays that role
+(`src/kernel/live_lsp.cpp`, `src/kernel/live_tcp.cpp`, `server/reach_live_lsp.py`).
+
+- **Discovery.** The game enumerates title servers with XTitleServerCreateEnumerator (XAM
+  enumerator: app 0xFC, open message 0x58039, items X_TITLE_SERVER {inaServer, flags,
+  szServerInfo[200]}, 0xD0 bytes; the SDK refused it). The LSP manager splits each
+  description at `,` and matches the tokens against its eight service names (4-byte strings
+  at 0x8325114C from the network configuration: `ttl,usr,shr,upl,web,prs,std,dbg`), so the
+  one server we return names all of them (`Function_82271658`). It then calls
+  XNetServerToInAddr(ina, 0x4D530064) and connects to a random port of the configured range
+  (1011-1026, `Lsp_ResolveServerAddress` 0x82271E38); net.cpp sends any TCP connection to
+  the server's address to its HTTP port.
+- **TCP.** The SDK's host TCP sockets passed the Windows FIONBIO code to Linux and set no
+  Winsock errors, so `ioctlsocket` failed and the game closed every connection before
+  `connect` (transport code `sub_822A4C58`: socket, FIONBIO, connect expecting
+  WSAEWOULDBLOCK, select). With the virtual network on, stream sockets are host TCP sockets
+  with Winsock semantics in `live_tcp.cpp`.
+- **HTTP.** Requests: `GET path HTTP/1.0` or `POST` with `multipart/form-data;
+  boundary=BUNGIEr0x0rz` (one part named `upload`, content type `application/x-reach-*`).
+  The reply parser accepts `HTTP/1.0 ` / `HTTP/1.1 ` and reads `Content-Length: `.
+  Payloads are BLF files: `_blf` (0x30, v1.2, big-endian byte-order mark FFFE), chunks
+  `{fourcc, u32 size with the 12-byte header, u16 major, u16 minor}`, `_eof` (v1.1: u32
+  length before it, u8 authentication type). Chunks are found by fourcc and major version.
+- **Signatures.** `_eof` authentication (checked by `Function_822E1DC0` with the type each
+  file requires): 0 none, 1 CRC32, 2 SHA-1, 3 SHA-1 + 256-byte RSA signature verified with
+  the key in XEX resource "00" (`Crypto_VerifyRsaSignatureResource00` 0x8242EA68). Signed
+  title files from Bungie verify unchanged; new ones would need that check relaxed.
+
+Requests seen after sign-in (main menu, about two minutes):
+
+| Request | What it is | Server answer |
+| --- | --- | --- |
+| `POST /gameapi_omaha/UserUpdateRewards.ashx?getDailyChallenges=1&userId=&machineId=` | rewards sync: `rpul` v3 (Credits block, Armory flags, purchase log), `chpr` v2 (challenge progress), `loca` | `rpdl` v2 (chunk 0x227: the server's totals block + zero tail). Per-XUID record in `DATA_DIR/players/<xuid>.json`; Credits, counters and flags never go down (max / union), so the game's merge (`new = local + server - uploaded`) restores a reinstalled profile. No `dcha`: every client picks the same challenges from the date. Verified: rewards state 2 ("synced"), and raising the stored Credits to 20,000 made the game adopt them and show "New Armory items" |
+| `POST /ReachPresenceApi/heartbeat.ashx` | `phbt` v5, 0x1BB bytes: in-matchmaking flag, u8 player count, 4 × 0x38 player entries (u64 XUID first), machine id at +0xE2, matchmaking party state from +0xF2 (party list of u64 XUID + u8 at +0xFF, stride 9) | `phbr` v2 (0x93 bytes, all zero). Its fields: +0 u8 flag, +1 u8 per-player flag mask, +2 u32 count, +6 u64 XUID[16] of players reserved for this party (counted by join checks), +0x86 u64, +0x8E u32 (`Function_8232F578`) |
+| `POST /ReachPresenceApi/query.ashx` | `preq` v3: u32, u32 count, u64 XUID[16] of roster players with Bungie presence pending | `pplr` v5 (0x1094: u32 count + 16 records of 0x109 bytes, XUID at +8), sent with count 0. The roster copies a record to its entry +0x15C; the join check reads +0x44 (status), +0x49 max players, +0x4A players, +0x4C (`Function_822CAAC0`). The record layout beyond that is not mapped |
+| `GET /storage/title/4d53085b/tracked/11860/default_hoppers/manifest_001.bin`, `en/rsa_manifest.bin`, `dynamic_pres_hopper_statistics.bin` | matchmaking playlists (11860 is the build) | 404 unless the operator provides the file under `DATA_DIR/storage/<path>` |
+| `GET /storage/user/4d53085b/…/<xuid>/user.bin`, `recent_players.bin`, `/storage/machine/…/machine.bin` | per-player and per-machine files | 404 (a new player has none) |
+| `GET /gameapi_omaha/ArenaGetSeasonStats.ashx`, `UserGetBnetSubscription.ashx`; `POST /upload_server/stats.ashx` | Arena, Bungie Pro, stats upload | 404 |
+
+Active roster (for the session side): entries come from a provider per roster type
+(`Function_8231A660`); each roster player's XAM presence comes from XPresenceSubscribe
+(0x5801E) / XPresenceCreateEnumerator (0x58019) as XONLINE_PRESENCE (0xA4 bytes, session
+id at +0xC; `Function_8231ACF8`). The session ids are then resolved to XSESSION_INFO (0x3C:
+id, host XNADDR, key) by `Function_8226CAD8` (`Function_8231B3D0` / `8231B098`), the game
+details (0x1270 bytes, as in the System Link reply) come from QoS, and the Bungie record
+from `query.ashx`. Joining a roster player goes through the deferred join
+`sub_822C6050` (`Function_822CB2D8`).
+
+Not done: hopper files (matchmaking playlists, game and map variants, all signed), file
+share (`FilesGetCatalog.ashx`, `FilesUpload.ashx`, … and user storage), Arena, the
+Bungie presence record layout, and a stable machine id (the `machineId` the game sends is
+derived from the XNADDR, which changes with the server's epoch).

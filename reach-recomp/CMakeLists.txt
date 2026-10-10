@@ -22,6 +22,9 @@ set(REACH_SOURCES
     src/kernel/file_delete_on_close.cpp
     src/kernel/identity.cpp
     src/kernel/input_autopress.cpp
+    src/kernel/live_xmsg.cpp
+    src/kernel/live_lsp.cpp
+    src/kernel/live_tcp.cpp
     src/kernel/net.cpp
     src/kernel/xam_enumerate.cpp
     src/kernel/xam_keyboard.cpp

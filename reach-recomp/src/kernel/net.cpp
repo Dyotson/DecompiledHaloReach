@@ -37,6 +37,7 @@
 
 #include "identity.h"
 #include "live.h"
+#include "live_tcp.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -199,7 +200,8 @@ enum LiveType : uint8_t {
   kData,         // player -> player: a datagram on the direct path
   kBye,
   kList,         // client -> server: who is in the room
-  kPeers,        // server -> client
+  kPeers,        // server -> client: the room's players with their presence
+  kPresence,     // client -> server: our presence (friend state, joinable session, status)
 };
 // XNADDR.ina of a player on a Reach Live server: 0xF0000000 | the id the server gave
 // it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.
@@ -461,6 +463,24 @@ class VNet {
     return true;
   }
 
+  std::vector<reach::LiveFriend> Roster() {
+    std::lock_guard<std::mutex> lock(mutex_);
+    return roster_;
+  }
+
+  void SetPresence(uint32_t state, const uint8_t* session_info, const std::string& status) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      presence_.assign(4 + 0x3C, 0);
+      Store32(presence_.data(), state);
+      if (session_info) std::memcpy(presence_.data() + 4, session_info, 0x3C);
+      const std::string line = status.substr(0, 255);
+      presence_.push_back(uint8_t(line.size()));
+      presence_.insert(presence_.end(), line.begin(), line.end());
+    }
+    SendPresence();
+  }
+
   // Virtual IP of a peer's XNADDR.
   uint32_t VipOfXnAddr(const uint8_t* xna) {
     const uint32_t ina = Load32(xna);
@@ -496,7 +516,7 @@ class VNet {
     lan_ = EnvFlag("REACH_NET_LAN");
     live_ = reach::LiveMode();
     relay_only_ = EnvFlag("REACH_SERVER_RELAY");
-    if (const char* room = std::getenv("REACH_ROOM")) room_ = std::string(room).substr(0, 32);
+    room_ = reach::LiveRoom();
     self_ip_ = INADDR_LOOPBACK;
     if (const char* ip = std::getenv("REACH_NET_IP"); ip && *ip) {
       in_addr a{};
@@ -637,7 +657,7 @@ class VNet {
   std::string ServerName() const { return server_host_ + ":" + std::to_string(server_port_); }
 
   bool ResolveServer() {
-    std::string spec = std::getenv("REACH_SERVER");
+    std::string spec = reach::LiveServerSpec();
     server_port_ = kLiveDefaultPort;
     if (auto colon = spec.rfind(':'); colon != std::string::npos) {
       server_port_ = uint16_t(std::atoi(spec.c_str() + colon + 1));
@@ -685,9 +705,19 @@ class VNet {
     SendLive(server_, kHello, body);
   }
 
-  // Registration, keep-alive and hole punching.
+  void SendPresence() {
+    std::vector<uint8_t> body;
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!live_id_ || presence_.empty()) return;
+      body = presence_;
+    }
+    SendLive(server_, kPresence, body);
+  }
+
+  // Registration, keep-alive, presence, the roster and hole punching.
   void LiveLoop() {
-    Clock::time_point next_hello{}, next_resolve{};
+    Clock::time_point next_hello{}, next_resolve{}, next_list{};
     bool resolved = false;
     for (;;) {
       const auto now = Clock::now();
@@ -695,8 +725,13 @@ class VNet {
         resolved = ResolveServer();
         next_resolve = now + std::chrono::seconds(10);
       }
+      if (resolved && now >= next_list && reach::LiveSignin()) {
+        next_list = now + std::chrono::seconds(3);
+        SendLive(server_, kList, {});
+      }
       if (resolved && now >= next_hello) {
         SendHello();
+        SendPresence();
         std::lock_guard<std::mutex> lock(mutex_);
         next_hello = now + std::chrono::seconds(live_id_ ? 5 : 1);
         if (live_id_ && now - last_welcome_ > std::chrono::seconds(20)) {
@@ -721,6 +756,13 @@ class VNet {
         }
       }
       for (auto& [to, body] : punches) SendLive(to, kPunch, body);
+      int roster_changed;
+      {
+        std::lock_guard<std::mutex> lock(mutex_);
+        roster_changed = roster_changed_;
+        roster_changed_ = 0;
+      }
+      if (roster_changed) reach::LiveRosterChanged(roster_changed == 2);
       std::this_thread::sleep_for(std::chrono::milliseconds(100));
     }
   }
@@ -821,9 +863,48 @@ class VNet {
         Deliver(vip, Load16(p + 4), Load16(p + 6), p + 8, n - 8);
         return;
       }
-      case kPeers:
-        if (from_server && n >= 2) REXLOG_INFO("REACH_LIVE: {} players in the room", Load16(p));
+      case kPeers: {
+        // Part header: total u16, first index u16, count u16; then the entries.
+        if (!from_server || n < 6) return;
+        const uint16_t total = Load16(p), first = Load16(p + 2), count = Load16(p + 4);
+        size_t pos = 6;
+        std::lock_guard<std::mutex> lock(mutex_);
+        if (first == 0) roster_parts_.clear();
+        if (first != roster_parts_seen_ && first != 0) return;  // a part went missing
+        roster_parts_seen_ = first;
+        for (uint16_t i = 0; i < count; ++i) {
+          reach::LiveFriend f;
+          if (pos + 13 > n) return;
+          f.id = Load32(p + pos);
+          f.xuid = uint64_t(Load32(p + pos + 4)) << 32 | Load32(p + pos + 8);
+          const size_t name_size = p[pos + 12];
+          pos += 13;
+          if (pos + name_size + 4 + 0x3C + 1 > n) return;
+          f.gamertag.assign(reinterpret_cast<const char*>(p + pos), name_size);
+          pos += name_size;
+          f.state = Load32(p + pos);
+          std::memcpy(f.session, p + pos + 4, 0x3C);
+          pos += 4 + 0x3C;
+          const size_t status_size = std::min<size_t>(p[pos], n - pos - 1);
+          f.status.assign(reinterpret_cast<const char*>(p + pos + 1), status_size);
+          pos += 1 + status_size;
+          roster_parts_seen_++;
+          if (f.id != live_id_) roster_parts_.push_back(std::move(f));
+        }
+        if (roster_parts_seen_ >= total) {
+          bool membership = roster_parts_.size() != roster_.size(), changed = membership;
+          for (size_t i = 0; i < roster_parts_.size() && !membership; ++i) {
+            const reach::LiveFriend &a = roster_parts_[i], &b = roster_[i];
+            membership = a.id != b.id;
+            changed = changed || membership || a.state != b.state || a.status != b.status ||
+                      std::memcmp(a.session, b.session, sizeof(a.session)) != 0;
+          }
+          roster_ = roster_parts_;
+          roster_parts_seen_ = 0;
+          if (changed) roster_changed_ = membership ? 2 : std::max(roster_changed_, 1);
+        }
         return;
+      }
       default:
         return;
     }
@@ -902,6 +983,10 @@ class VNet {
   Clock::time_point last_welcome_{};
   std::unordered_map<uint32_t, LivePeer> live_peers_;
   std::unordered_map<uint32_t, uint32_t> live_id_by_vip_;
+  std::vector<uint8_t> presence_;  // body of our last presence message
+  std::vector<reach::LiveFriend> roster_, roster_parts_;
+  uint16_t roster_parts_seen_ = 0;
+  int roster_changed_ = 0;  // 1: presence changed, 2: players came or went; LiveLoop reports it
 };
 
 bool Ours(uint32_t handle) {
@@ -916,6 +1001,17 @@ namespace reach {
 bool LiveServerHttp(uint32_t& ip, uint16_t& port) {
   return NetOn() && VNet::Get().LiveServerHttp(ip, port);
 }
+
+std::vector<LiveFriend> LiveRoster() {
+  if (!NetOn()) return {};
+  return VNet::Get().Roster();
+}
+
+void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::string& status) {
+  if (NetOn()) VNet::Get().SetPresence(state, session_info, status);
+}
+
+void LiveSelfXnAddr(uint8_t* xnaddr) { VNet::Get().WriteSelfXnAddr(xnaddr); }
 }  // namespace reach
 
 #define REACH_NET_SDK(name) \
@@ -1035,14 +1131,20 @@ REACH_NET_TRACE(NetDll_XNetQosLookup)
 REACH_NET_TRACE(NetDll_XNetQosServiceLookup)
 REACH_NET_TRACE(NetDll_XNetQosRelease)
 REACH_NET_TRACE(NetDll_XNetQosGetListenStats)
-REACH_NET_TRACE(XNetLogonGetMachineID)
-REACH_NET_TRACE(XNetLogonGetTitleID)
+// XNetLogonGetMachineID / XNetLogonGetTitleID: src/kernel/live_xmsg.cpp.
 
 // --- Sockets ---------------------------------------------------------------
 
-// SOCKET socket(int af, int type, int protocol): UDP and VDP datagram sockets are ours.
-REACH_NET_FUNC(NetDll_socket, NetOn() && VNet::Get().Ready() && ctx.r5.u32 == 2, {
-  ctx.r3.u64 = VNet::Get().CreateSocket();
+// --- TCP sockets (live_tcp.cpp): the title servers' HTTP connections ---------
+namespace {
+bool Tcp(uint32_t handle) { return NetOn() && reach::tcp::IsOurs(handle); }
+uint64_t TcpResult(int32_t result) { return uint64_t(int64_t(result)); }
+}  // namespace
+
+// SOCKET socket(int af, int type, int protocol): UDP and VDP datagram sockets are ours;
+// stream sockets go to live_tcp.cpp.
+REACH_NET_FUNC(NetDll_socket, NetOn() && ((ctx.r5.u32 == 2 && VNet::Get().Ready()) || ctx.r5.u32 == 1), {
+  ctx.r3.u64 = ctx.r5.u32 == 1 ? reach::tcp::Socket() : VNet::Get().CreateSocket();
 })
 
 // int bind(SOCKET s, const sockaddr* name, int namelen)
@@ -1062,6 +1164,11 @@ extern "C" REX_FUNC(__imp__NetDll_connect) {
   const uint32_t in[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
   const uint32_t lr = uint32_t(ctx.lr);
   uint8_t* a = base + ctx.r5.u32;
+  if (Tcp(ctx.r4.u32)) {
+    ctx.r3.u64 = TcpResult(reach::tcp::Connect(ctx.r4.u32, Load32(a + 4), Load16(a + 2)));
+    Log("NetDll_connect", calls, in, ctx.r3.u32, " (TCP)", lr);
+    return;
+  }
   if (Ours(ctx.r4.u32)) {
     VNet::Get().Connect(ctx.r4.u32, Load32(a + 4), Load16(a + 2));
     ctx.r3.u64 = 0;
@@ -1084,20 +1191,28 @@ extern "C" REX_FUNC(__imp__NetDll_connect) {
 }
 
 // int closesocket(SOCKET s)
-REACH_NET_FUNC(NetDll_closesocket, Ours(ctx.r4.u32), {
-  VNet::Get().Close(ctx.r4.u32);
-  ctx.r3.u64 = 0;
+REACH_NET_FUNC(NetDll_closesocket, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
+  if (Tcp(ctx.r4.u32)) {
+    ctx.r3.u64 = TcpResult(reach::tcp::Close(ctx.r4.u32));
+  } else {
+    VNet::Get().Close(ctx.r4.u32);
+    ctx.r3.u64 = 0;
+  }
 })
 
 // int setsockopt(SOCKET s, int level, int optname, const char* optval, int optlen)
-REACH_NET_FUNC(NetDll_setsockopt, Ours(ctx.r4.u32), ctx.r3.u64 = 0)
-REACH_NET_FUNC(NetDll_shutdown, Ours(ctx.r4.u32), ctx.r3.u64 = 0)
+REACH_NET_FUNC(NetDll_setsockopt, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), ctx.r3.u64 = 0)
+REACH_NET_FUNC(NetDll_shutdown, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
+  ctx.r3.u64 = Tcp(ctx.r4.u32) ? TcpResult(reach::tcp::Shutdown(ctx.r4.u32, ctx.r5.u32)) : 0;
+})
 
 // int ioctlsocket(SOCKET s, long cmd, u_long* argp)
-REACH_NET_FUNC(NetDll_ioctlsocket, Ours(ctx.r4.u32), {
+REACH_NET_FUNC(NetDll_ioctlsocket, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
   const uint32_t cmd = ctx.r5.u32;
   uint8_t* arg = base + ctx.r6.u32;
-  if (cmd == 0x8004667E) {  // FIONBIO
+  if (Tcp(ctx.r4.u32)) {
+    ctx.r3.u64 = TcpResult(reach::tcp::Ioctl(ctx.r4.u32, cmd, arg));
+  } else if (cmd == 0x8004667E) {  // FIONBIO
     VNet::Get().SetNonblocking(ctx.r4.u32, Load32(arg) != 0);
     ctx.r3.u64 = 0;
   } else if (cmd == 0x4004667F) {  // FIONREAD
@@ -1125,7 +1240,11 @@ REACH_NET_FUNC(NetDll_sendto, Ours(ctx.r4.u32), {
 })
 
 // int send(SOCKET s, const char* buf, int len, int flags)
-REACH_NET_FUNC(NetDll_send, Ours(ctx.r4.u32), {
+REACH_NET_FUNC(NetDll_send, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
+  if (Tcp(ctx.r4.u32)) {
+    ctx.r3.u64 = TcpResult(reach::tcp::Send(ctx.r4.u32, base + ctx.r5.u32, ctx.r6.u32));
+    return;
+  }
   uint32_t vip = 0;
   uint16_t port = 0;
   VNet::Get().Connected(ctx.r4.u32, vip, port);
@@ -1167,7 +1286,11 @@ REACH_NET_FUNC(NetDll_recvfrom, Ours(ctx.r4.u32), {
 })
 
 // int recv(SOCKET s, char* buf, int len, int flags)
-REACH_NET_FUNC(NetDll_recv, Ours(ctx.r4.u32), ctx.r3.u64 = Receive(ctx, base, 0, 0))
+REACH_NET_FUNC(NetDll_recv, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
+  ctx.r3.u64 = Tcp(ctx.r4.u32)
+                   ? TcpResult(reach::tcp::Recv(ctx.r4.u32, base + ctx.r5.u32, ctx.r6.u32))
+                   : Receive(ctx, base, 0, 0);
+})
 
 namespace {
 // Guest fd_set: u32 fd_count, SOCKET fd_array[64].
@@ -1195,10 +1318,17 @@ bool AllOurs(uint8_t* base, uint32_t set) {
 
 // int select(int nfds, fd_set* readfds, fd_set* writefds, fd_set* exceptfds, const timeval* timeout)
 REACH_NET_FUNC(NetDll_select,
-               NetOn() && AllOurs(base, ctx.r5.u32) && AllOurs(base, ctx.r6.u32) &&
-                   AllOurs(base, ctx.r7.u32) &&
-                   !(ReadSet(base, ctx.r5.u32).empty() && ReadSet(base, ctx.r6.u32).empty()),
+               NetOn() && (reach::tcp::AllOurs(base, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32) ||
+                           (AllOurs(base, ctx.r5.u32) && AllOurs(base, ctx.r6.u32) &&
+                            AllOurs(base, ctx.r7.u32) &&
+                            !(ReadSet(base, ctx.r5.u32).empty() &&
+                              ReadSet(base, ctx.r6.u32).empty()))),
                {
+                 if (reach::tcp::AllOurs(base, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32)) {
+                   ctx.r3.u64 = TcpResult(reach::tcp::Select(base, ctx.r5.u32, ctx.r6.u32,
+                                                             ctx.r7.u32, ctx.r8.u32));
+                   return;
+                 }
                  int64_t timeout_us = -1;
                  if (ctx.r8.u32) {
                    timeout_us = int64_t(int32_t(Load32(base + ctx.r8.u32))) * 1000000 +
@@ -1225,7 +1355,6 @@ REACH_NET_TRACE(NetDll_inet_addr)
 // --- XAM sessions, voice and messages (trace only) -------------------------
 
 REACH_NET_TRACE(XamShowSigninUI)
-REACH_NET_TRACE(XamUserAreUsersFriends)
 REACH_NET_TRACE(XamShowFriendRequestUI)
 REACH_NET_TRACE(XamShowGamerCardUIForXUID)
 REACH_NET_TRACE(XamSessionCreateHandle)
@@ -1234,29 +1363,6 @@ REACH_NET_TRACE(XamVoiceCreate)
 REACH_NET_TRACE(XamVoiceClose)
 REACH_NET_TRACE(XamVoiceSubmitPacket)
 REACH_NET_TRACE(XamVoiceHeadsetPresent)
-// XMsg calls to XAM apps other than the music player (0xFA) carry XSession and
-// XUser messages; they are always logged in full.
-#define REACH_NET_TRACE_XMSG(name)                                           \
-  extern "C" REX_FUNC(__imp__##name) {                                       \
-    REACH_NET_SDK(name);                                                     \
-    static std::atomic<uint64_t> calls{0};                                   \
-    if (!NetTrace()) {                                                       \
-      if (sdk) sdk(ctx, base);                                               \
-      return;                                                                \
-    }                                                                        \
-    if (ctx.r3.u32 == 0xFA) {                                                \
-      Traced(#name, sdk, calls, ctx, base);                                  \
-      return;                                                                \
-    }                                                                        \
-    const uint32_t in[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32,              \
-                            ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};             \
-    if (sdk) sdk(ctx, base);                                                 \
-    REXLOG_INFO("NETTRACE {}(app {:02X}, msg {:08X}, {:08X}, {:08X}, {:08X}, {:08X}) -> {:08X}", \
-                #name, in[0], in[1], in[2], in[3], in[4], in[5], ctx.r3.u32); \
-  }
-
-REACH_NET_TRACE_XMSG(XMsgStartIORequest)
-REACH_NET_TRACE_XMSG(XMsgStartIORequestEx)
-REACH_NET_TRACE_XMSG(XMsgInProcessCall)
+// XMsgStartIORequest[Ex] and XMsgInProcessCall: src/kernel/live_xmsg.cpp.
 REACH_NET_TRACE(XMsgCancelIORequest)
 REACH_NET_TRACE(XMsgCompleteIORequest)

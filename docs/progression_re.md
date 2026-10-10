@@ -215,6 +215,31 @@ Status of each endpoint:
 
 **[C]** The community "Reach Stats API" (`bungie.net/api/reach/...`) is **not** used by the game. The game only talks to `gameapi_omaha` and LSP storage.
 
+### 2.4 Served by Reach Live (2026-10-09)
+
+The Reach Live server now answers the rewards sync (`server/reach_live_lsp.py`; transport and
+the other requests in `docs/online_plan.md` section 5.1):
+
+- **[C]** Reply checks (`RewardsSync_UpdateController`): the buffer must be a BLF file
+  (`_blf` major 1, BOM FFFE, `Function_822E19D8`); `rpdl` major 2 with chunk size exactly
+  0x227 is required for success (else state 3, retry); `dcha` major 3 and `fulc` major 1
+  are optional.
+- **[C]** The merge callback receives the uploaded `rpul` payload and the `rpdl` payload:
+  totals become `local + (rpdl - uploaded)`, ownership is the union (server-only items take
+  the server bit), rpdl +0x208 u16 / +0x20A u32 / +0x20E u64 are stored at state
+  +0xED4 / +0xED8 / +0xEE0, rpdl +0x216 / +0x21A are the bonus grant. If the profile never
+  synced and the result is below the local total, the server state is not applied and the
+  difference goes to 0x8395EDA4 + ctrl*0x20.
+- **Verified in game:** after a sync the state byte is 2 and state +0x734 bit 0 is set;
+  raising the server's stored Credits from 5,000 to 20,000 made the next sync set block A to
+  20,000 and the game announced new Armory items.
+- **[C]** Side effect handled: with +0x734 bit 0 set, unsynced earnings are capped at the
+  network configuration's offline cap (0x82BD45A8, default 1000) instead of the online one
+  (0x82BD45AC, 100000). The rewards tick hook (`src/hooks/offline_challenges.cpp`) raises
+  the offline cap to the online one, so playing without the server is not limited.
+- The server does not send `dcha`: challenges stay picked on the client (section 4.1), the
+  same for every player of this build on a given day. It stores the uploaded `chpr`.
+
 ## 3. Earning credits
 
 | Function | Role |

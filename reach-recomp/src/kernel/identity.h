@@ -12,10 +12,17 @@ namespace reach {
 // (default ~/.local/share/reach/4D53085B).
 std::filesystem::path DataDir();
 
-// REACH_SERVER is set: the game is connected to a Reach Live server.
+// The Reach Live server, host[:port]: REACH_SERVER, else the live_server setting.
+const std::string& LiveServerSpec();
+
+// The room on the server: REACH_ROOM, else the live_room setting.
+const std::string& LiveRoom();
+
+// A Reach Live server is configured.
 bool LiveMode();
 
-// Live mode and REACH_LIVE_SIGNIN=1: the profile reports "signed in to Xbox Live".
+// Live mode and REACH_LIVE_SIGNIN=1 (or the live_signin setting): the profile reports
+// "signed in to Xbox Live".
 bool LiveSignin();
 
 // XUID of the signed-in player: REACH_XUID, else the online XUID of the saved Live

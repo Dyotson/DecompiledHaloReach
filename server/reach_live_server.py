@@ -25,7 +25,9 @@ import reach_live_lsp as lsp
 MAGIC = b"RLV1"
 VERSION = 1
 
-HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD, PUNCH, PUNCH_ACK, DATA, BYE, LIST, PEERS = range(1, 13)
+(HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD, PUNCH, PUNCH_ACK, DATA, BYE, LIST, PEERS,
+ PRESENCE) = range(1, 14)
+SESSION_INFO_SIZE = 0x3C  # XSESSION_INFO: session id, host XNADDR, key-exchange key
 
 PEER_TIMEOUT = 30.0  # seconds without a HELLO before a peer is dropped
 MAX_PAYLOAD = 1500
@@ -46,6 +48,11 @@ class Peer:
         self.seen = time.monotonic()
         self.since = time.time()
         self.relayed_bytes = 0
+        # Presence, as friends see it: X_ONLINE_FRIENDSTATE flags, the joinable session
+        # (an XSESSION_INFO, zeros when none) and a status line.
+        self.state = 0
+        self.session = bytes(SESSION_INFO_SIZE)
+        self.status = ""
 
 
 def ip_to_u32(ip):
@@ -100,6 +107,8 @@ class ReachLive(asyncio.DatagramProtocol):
                 self.on_relay(peer, body)
             elif kind == LIST:
                 self.on_list(peer, addr)
+            elif kind == PRESENCE:
+                self.on_presence(peer, body)
             elif kind == BYE:
                 self.drop(peer, "left")
         except (struct.error, IndexError, UnicodeDecodeError) as e:
@@ -162,13 +171,39 @@ class ReachLive(asyncio.DatagramProtocol):
         self.relayed_packets += 1
         self.send(dst.addr, FORWARD, self.forward_header(src) + body[4:])
 
+    def on_presence(self, peer, body):
+        (state,) = struct.unpack_from(">I", body, 0)
+        session = body[4:4 + SESSION_INFO_SIZE]
+        status_len = body[4 + SESSION_INFO_SIZE]
+        status = body[5 + SESSION_INFO_SIZE:5 + SESSION_INFO_SIZE + status_len].decode()
+        if len(session) != SESSION_INFO_SIZE:
+            return
+        if (state, session, status) != (peer.state, peer.session, peer.status):
+            log.info("presence #%d %r state %08X session %s %r", peer.id, peer.name, state,
+                     session[:8].hex(), status)
+        peer.state, peer.session, peer.status = state, session, status
+
     def on_list(self, src, addr):
-        peers = [src] + self.room_peers(src)
-        body = struct.pack(">H", len(peers))
-        for p in peers[:200]:
-            name = p.name.encode()
-            body += struct.pack(">IQB", p.id, p.xuid, len(name)) + name
-        self.send(addr, PEERS, body)
+        """The room's players (the asker first): the friends list of a Live player.
+        Each: id u32, XUID u64, gamertag (u8 length + UTF-8), presence state u32,
+        XSESSION_INFO, status (u8 length + UTF-8). Sent in parts that fit a datagram."""
+        peers = ([src] + self.room_peers(src))[:100]
+        entries = []
+        for p in peers:
+            name, status = p.name.encode(), p.status.encode()[:255]
+            entries.append(struct.pack(">IQB", p.id, p.xuid, len(name)) + name +
+                           struct.pack(">I", p.state) + p.session + bytes([len(status)]) + status)
+        # Part header: total players u16, index of the first entry u16, entries in part u16.
+        start = 0
+        while True:
+            part, size = [], 6
+            while start + len(part) < len(entries) and size + len(entries[start + len(part)]) <= 1200:
+                size += len(entries[start + len(part)])
+                part.append(entries[start + len(part)])
+            self.send(addr, PEERS, struct.pack(">HHH", len(entries), start, len(part)) + b"".join(part))
+            start += len(part)
+            if start >= len(entries) or not part:
+                break
 
     def drop(self, peer, why):
         self.peers.pop(peer.id, None)
@@ -186,7 +221,8 @@ class ReachLive(asyncio.DatagramProtocol):
         for p in self.peers.values():
             rooms.setdefault(p.room, []).append(
                 {"id": p.id, "gamertag": p.name, "xuid": f"{p.xuid:016X}",
-                 "online_for": int(time.time() - p.since), "relayed_bytes": p.relayed_bytes})
+                 "online_for": int(time.time() - p.since), "relayed_bytes": p.relayed_bytes,
+                 "state": f"{p.state:08X}", "session": p.session[:8].hex(), "status": p.status})
         return {"server": "reach-live", "protocol": VERSION, "uptime": int(time.time() - self.started),
                 "players": len(self.peers), "relayed_packets": self.relayed_packets, "rooms": rooms}
 
@@ -249,7 +285,9 @@ async def main():
     parser.add_argument("--motd", default="Welcome to Reach Live", help="message sent to clients")
     parser.add_argument("--max-peers", type=int, default=1024)
     parser.add_argument("-v", "--verbose", action="store_true")
+    lsp.add_arguments(parser)
     args = parser.parse_args()
+    lsp.configure(args)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s")
 
