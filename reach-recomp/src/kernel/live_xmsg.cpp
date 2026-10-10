@@ -47,6 +47,7 @@
 
 #include <algorithm>
 #include <chrono>
+#include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -264,6 +265,8 @@ uint64_t SessionId(const uint8_t* info) {
   return uint64_t(Load32(info)) << 32 | Load32(info + 4);
 }
 
+void PublishMatchLocked();  // Matchmaking, below
+
 // The bytes our presence carries after the status line (friends read them back in
 // LiveFriend::extra): slots (max public, max private, filled public, filled private, one
 // byte each), then the session's QoS data (u16 length + bytes).
@@ -327,6 +330,7 @@ void XSessionCreate(uint8_t* base, uint32_t buffer) {
   s.order = ++session_order;
   hosted_sessions[object] = s;
   PublishPresenceLocked();
+  PublishMatchLocked();
 }
 
 // XSessionDelete {session object, ...}
@@ -337,6 +341,7 @@ void XSessionDelete(uint8_t* base, uint32_t buffer) {
   qos_data.erase(SessionId(it->second.info));
   hosted_sessions.erase(it);
   PublishPresenceLocked();
+  PublishMatchLocked();
 }
 
 // XSessionModify {session object, flags, public slots, private slots}: only the join
@@ -350,6 +355,7 @@ void XSessionModify(uint8_t* base, uint32_t buffer) {
   it->second.max_public = Load32(base + buffer + 8);
   it->second.max_private = Load32(base + buffer + 12);
   PublishPresenceLocked();
+  PublishMatchLocked();
 }
 
 // XSessionJoin{Local,Remote} (0xB0012) / Leave (0xB0013) {session object, user count,
@@ -372,6 +378,7 @@ void XSessionMembers(uint8_t* base, uint32_t buffer, bool join) {
     }
   }
   PublishPresenceLocked();
+  PublishMatchLocked();
 }
 
 // XSessionSearchByIds {user, id count, ids, results size, results, ...} (0xB0060) and
@@ -482,6 +489,218 @@ uint32_t XInviteGetAcceptedInfo(uint8_t* base, uint32_t args) {
   return kSuccess;
 }
 
+// --- Matchmaking ---------------------------------------------------------------------
+//
+// Matchmaking (docs/online_plan.md section 5.4) searches for sessions with
+// XSessionSearchWeighted, filtered by the playlist (the searcher's property
+// 0x10000015, the hopper id), and hosts one with XSessionCreate (flag
+// XSESSION_CREATE_USES_MATCHMAKING) when it finds none. The session we host is published
+// on the server with our playlist and the record below; a search asks the server for the
+// room's sessions with the searched playlist. The record: XSESSION_INFO, slots (max
+// public, max private, filled public, filled private: u8 each), our user properties
+// (u8 count, then id u32, type u8, value 8 bytes) and contexts (u8 count, then id u32,
+// value u32), the QoS data (u16 length + bytes).
+
+constexpr uint32_t kSessionUsesMatchmaking = 0x8;
+constexpr uint32_t kPropertyHopper = 0x10000015;
+
+struct UserValue {
+  uint8_t type = 0;
+  uint8_t value[8] = {};
+};
+std::unordered_map<uint32_t, UserValue> user_properties;  // ours, by property id
+std::unordered_map<uint32_t, uint32_t> user_contexts;     // by context id
+bool match_published = false;
+uint32_t match_playlist = 0;  // what we last searched for: the playlist our session is for
+
+// A session a search found: its record, and the QoS data lookups answer with.
+struct FoundSession {
+  uint64_t xuid = 0;
+  uint8_t info[kSessionInfoSize] = {};
+  uint8_t slots[4] = {};
+  std::vector<std::pair<uint32_t, UserValue>> properties;
+  std::vector<std::pair<uint32_t, uint32_t>> contexts;
+  std::vector<uint8_t> qos;
+};
+std::mutex match_mutex;
+std::condition_variable match_answered;
+uint32_t match_request = 0, match_answer = 0;
+std::vector<FoundSession> match_results;                    // of the last answer
+std::unordered_map<uint64_t, std::vector<uint8_t>> found_qos;  // by session id
+
+// XUserSetProperty {user index, unused, XUID, property id, size, value pointer}: the
+// property's type is its id's top nibble; types with an inline value are kept.
+void XUserSetProperty(uint8_t* base, uint32_t buffer) {
+  const uint32_t id = Load32(base + buffer + 16), size = Load32(base + buffer + 20);
+  const uint32_t value = Load32(base + buffer + 24);
+  const uint8_t type = uint8_t(id >> 28);
+  if (!value || type == 4 || type == 6 || size > 8) return;  // strings, binary
+  UserValue v;
+  v.type = type;
+  std::memcpy(v.value, base + value, size);
+  std::lock_guard<std::mutex> lock(sessions_mutex);
+  user_properties[id] = v;
+}
+
+// XUserSetContext {user index, unused, XUID, context id, value}
+void XUserSetContext(uint8_t* base, uint32_t buffer) {
+  std::lock_guard<std::mutex> lock(sessions_mutex);
+  user_contexts[Load32(base + buffer + 16)] = Load32(base + buffer + 20);
+}
+
+// Our session's playlist: the property if we set it, else what we search for (Reach
+// sets the hopper id only on its searches).
+uint32_t PlaylistLocked() {
+  auto it = user_properties.find(kPropertyHopper);
+  return it == user_properties.end() ? match_playlist : Load32(it->second.value);
+}
+
+// Publishes the newest matchmaking session we host, or withdraws ours. Needs
+// sessions_mutex.
+void PublishMatchLocked() {
+  const HostedSession* best = nullptr;
+  for (const auto& [object, s] : hosted_sessions) {
+    if ((s.flags & kSessionUsesMatchmaking) && (!best || s.order > best->order)) best = &s;
+  }
+  if (!best) {
+    if (match_published) reach::LiveSendMatch(false, {0});
+    match_published = false;
+    return;
+  }
+  std::vector<uint8_t> body(5);
+  body[0] = 1;
+  Store32(body.data() + 1, PlaylistLocked());
+  body.insert(body.end(), best->info, best->info + kSessionInfoSize);
+  for (uint32_t n : {best->max_public, best->max_private, best->filled_public, best->filled_private}) {
+    body.push_back(uint8_t(std::min<uint32_t>(n, 255)));
+  }
+  body.push_back(uint8_t(std::min<size_t>(user_properties.size(), 32)));
+  size_t count = 0;
+  for (const auto& [id, v] : user_properties) {
+    if (count++ == 32) break;
+    body.resize(body.size() + 13);
+    uint8_t* p = body.data() + body.size() - 13;
+    Store32(p, id);
+    p[4] = v.type;
+    std::memcpy(p + 5, v.value, 8);
+  }
+  body.push_back(uint8_t(std::min<size_t>(user_contexts.size(), 32)));
+  count = 0;
+  for (const auto& [id, value] : user_contexts) {
+    if (count++ == 32) break;
+    body.resize(body.size() + 8);
+    Store32(body.data() + body.size() - 8, id);
+    Store32(body.data() + body.size() - 4, value);
+  }
+  auto it = qos_data.find(SessionId(best->info));
+  const size_t qos = it == qos_data.end() ? 0 : std::min<size_t>(it->second.size(), 1000);
+  body.push_back(uint8_t(qos >> 8));
+  body.push_back(uint8_t(qos));
+  if (qos) body.insert(body.end(), it->second.begin(), it->second.begin() + qos);
+  reach::LiveSendMatch(false, body);
+  match_published = true;
+}
+
+// Parses one record of a search answer; false when it is cut short.
+bool ParseRecord(const uint8_t* p, size_t n, FoundSession& s) {
+  size_t pos = kSessionInfoSize + 4;
+  if (n < pos + 1) return false;
+  std::memcpy(s.info, p, kSessionInfoSize);
+  std::memcpy(s.slots, p + kSessionInfoSize, 4);
+  for (size_t i = 0, count = p[pos++]; i < count; ++i, pos += 13) {
+    if (pos + 13 > n) return false;
+    UserValue v;
+    v.type = p[pos + 4];
+    std::memcpy(v.value, p + pos + 5, 8);
+    s.properties.emplace_back(Load32(p + pos), v);
+  }
+  if (pos + 1 > n) return false;
+  for (size_t i = 0, count = p[pos++]; i < count; ++i, pos += 8) {
+    if (pos + 8 > n) return false;
+    s.contexts.emplace_back(Load32(p + pos), Load32(p + pos + 4));
+  }
+  if (pos + 2 > n) return false;
+  const size_t qos = size_t(p[pos]) << 8 | p[pos + 1];
+  if (pos + 2 + qos > n) return false;
+  s.qos.assign(p + pos + 2, p + pos + 2 + qos);
+  return true;
+}
+
+// XSessionSearchWeighted {procedure, user, max results, weighted property count u16,
+// weighted context count u16, their pointers, property count u16, context count u16,
+// properties, contexts, results size, results}. XUSER_PROPERTY is {id, pad, XUSER_DATA
+// {type u8, pad, value at +8}} (0x18 bytes), XUSER_CONTEXT {id, value}. Results as
+// XSessionSearch above, with each session's properties and contexts after them.
+uint32_t XSessionSearchWeighted(uint8_t* base, uint32_t buffer) {
+  constexpr uint32_t kResultSize = 0x5C, kPropertySize = 0x18;
+  const uint32_t max_results = Load32(base + buffer + 8);
+  const uint32_t property_count = Load32(base + buffer + 0x18) >> 16;
+  const uint32_t properties = Load32(base + buffer + 0x1C);
+  const uint32_t results_size = Load32(base + buffer + 0x24), results = Load32(base + buffer + 0x28);
+  if (!results || results_size < 8) return kInvalidArg;
+  uint32_t playlist = 0;
+  for (uint32_t i = 0; i < property_count && i < 64 && properties; ++i) {
+    const uint8_t* prop = base + properties + kPropertySize * i;
+    if (Load32(prop) == kPropertyHopper) playlist = Load32(prop + 0x10);
+  }
+  {
+    std::lock_guard<std::mutex> lock(sessions_mutex);
+    if (playlist != match_playlist) {
+      match_playlist = playlist;
+      PublishMatchLocked();
+    }
+  }
+  std::vector<FoundSession> found;
+  {
+    std::unique_lock<std::mutex> lock(match_mutex);
+    const uint32_t request = ++match_request;
+    std::vector<uint8_t> body(8);
+    Store32(body.data(), playlist);
+    Store32(body.data() + 4, request);
+    reach::LiveSendMatch(true, body);
+    if (match_answered.wait_for(lock, std::chrono::milliseconds(500),
+                                [&] { return match_answer == request; })) {
+      found = match_results;
+    }
+  }
+  std::memset(base + results, 0, results_size);
+  const uint32_t count = std::min<uint32_t>(
+      {uint32_t(found.size()), max_results, (results_size - 8) / kResultSize});
+  Store32(base + results, count);
+  Store32(base + results + 4, results + 8);
+  uint32_t extra = results + 8 + count * kResultSize;  // properties and contexts go here
+  const uint32_t end = results + results_size;
+  for (uint32_t i = 0; i < count; ++i) {
+    const FoundSession& s = found[i];
+    uint8_t* r = base + results + 8 + i * kResultSize;
+    std::memcpy(r, s.info, kSessionInfoSize);
+    Store32(r + 0x3C, s.slots[0] > s.slots[2] ? s.slots[0] - s.slots[2] : 0);
+    Store32(r + 0x40, s.slots[1] > s.slots[3] ? s.slots[1] - s.slots[3] : 0);
+    Store32(r + 0x44, s.slots[2]);
+    Store32(r + 0x48, s.slots[3]);
+    const uint32_t props_size = uint32_t(s.properties.size()) * kPropertySize;
+    const uint32_t contexts_size = uint32_t(s.contexts.size()) * 8;
+    if (extra + props_size + contexts_size > end) continue;
+    Store32(r + 0x4C, uint32_t(s.properties.size()));
+    Store32(r + 0x50, uint32_t(s.contexts.size()));
+    Store32(r + 0x54, extra);
+    for (const auto& [id, v] : s.properties) {
+      Store32(base + extra, id);
+      base[extra + 8] = v.type;
+      std::memcpy(base + extra + 0x10, v.value, 8);
+      extra += kPropertySize;
+    }
+    Store32(r + 0x58, extra);
+    for (const auto& [id, value] : s.contexts) {
+      Store32(base + extra, id);
+      Store32(base + extra + 4, value);
+      extra += 8;
+    }
+  }
+  REXLOG_INFO("REACH_LIVE: matchmaking search (playlist {}): {} sessions", playlist, count);
+  return kSuccess;
+}
+
 // Our part of a message: kNotOurs lets the SDK answer (after any bookkeeping above).
 uint32_t Handle(uint8_t* base, uint32_t app, uint32_t message, uint32_t arg1, uint32_t arg2) {
   if (!reach::LiveSignin()) return kNotOurs;
@@ -524,6 +743,14 @@ uint32_t Handle(uint8_t* base, uint32_t app, uint32_t message, uint32_t arg1, ui
         return XSessionSearchById(base, arg1);
       case 0x000B0060:
         return XSessionSearchByIds(base, arg1);
+      case 0x000B0006:
+        XUserSetContext(base, arg1);
+        break;
+      case 0x000B0007:
+        XUserSetProperty(base, arg1);
+        break;
+      case 0x000B0065:
+        return XSessionSearchWeighted(base, arg1);
     }
   }
   return kNotOurs;
@@ -597,6 +824,28 @@ void LiveInviteReceived(const LiveInvite& invite) {
   if (auto* kernel = REX_KERNEL_STATE()) kernel->BroadcastNotification(0x02000002, 0);
 }
 
+// The server's answer to a matchmaking search: request u32, count u16, then per session
+// the host's id u32, XUID u64 and record (u16 length + bytes).
+void LiveMatchResults(const uint8_t* p, size_t n) {
+  if (n < 6) return;
+  std::vector<FoundSession> found;
+  size_t pos = 6;
+  for (uint32_t i = 0, count = uint32_t(p[4]) << 8 | p[5]; i < count; ++i) {
+    if (pos + 14 > n) break;
+    const size_t size = size_t(p[pos + 12]) << 8 | p[pos + 13];
+    if (pos + 14 + size > n) break;
+    FoundSession s;
+    s.xuid = uint64_t(Load32(p + pos + 4)) << 32 | Load32(p + pos + 8);
+    if (ParseRecord(p + pos + 14, size, s)) found.push_back(std::move(s));
+    pos += 14 + size;
+  }
+  std::lock_guard<std::mutex> lock(match_mutex);
+  for (const auto& s : found) found_qos[SessionId(s.info)] = s.qos;
+  match_results = std::move(found);
+  match_answer = Load32(p);
+  match_answered.notify_all();
+}
+
 // Notifications for the game's friends code (XN_FRIENDS_PRESENCE_CHANGED,
 // XN_FRIENDS_FRIEND_ADDED; the parameter is the user index).
 void LiveRosterChanged(bool membership_changed) {
@@ -659,6 +908,7 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosListen) {
     }
     if (flags & (kDisable | kRelease)) qos_data.erase(id);
     PublishPresenceLocked();
+    PublishMatchLocked();
   }
   ctx.r3.u64 = 0;
 }
@@ -677,6 +927,7 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
   }
   auto stack_arg = [&](int index) { return Load32(base + ctx.r1.u32 + 0x54 + (index - 8) * 8); };
   const uint32_t count = std::min<uint32_t>(ctx.r4.u32, 64), xnas = ctx.r5.u32;
+  const uint32_t xnkids = ctx.r6.u32;
   const uint32_t probes = stack_arg(8), event = stack_arg(11), out = stack_arg(12);
   const auto roster = reach::LiveRoster();
   std::vector<std::vector<uint8_t>> data(count);
@@ -686,6 +937,15 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
     if (!xna) continue;
     const uint32_t ina = Load32(base + xna);
     if ((ina & 0xFF000000) != 0xF0000000) continue;  // not a Reach Live player
+    if (const uint32_t kid = xnkids ? Load32(base + xnkids + 4 * i) : 0) {
+      std::lock_guard<std::mutex> lock(match_mutex);  // a matchmaking session we found
+      auto it = found_qos.find(uint64_t(Load32(base + kid)) << 32 | Load32(base + kid + 4));
+      if (it != found_qos.end()) {
+        known[i] = true;
+        data[i] = it->second;
+        continue;
+      }
+    }
     for (const auto& f : roster) {
       if (f.id != (ina & 0x00FFFFFF)) continue;
       known[i] = true;

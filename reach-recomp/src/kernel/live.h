@@ -51,6 +51,12 @@ bool LiveTakeInvite(LiveInvite& out);
 // Called by the network thread when an invite arrives (live_xmsg.cpp).
 void LiveInviteReceived(const LiveInvite& invite);
 
+// Matchmaking sessions on the server (live_xmsg.cpp, docs/online_plan.md section 5.4):
+// publish ours or search for a playlist's (bodies as reach_live_server.py documents);
+// the network thread hands the server's answers to LiveMatchResults.
+void LiveSendMatch(bool search, const std::vector<uint8_t>& body);
+void LiveMatchResults(const uint8_t* body, size_t size);
+
 // Called by the network thread when the roster changed (live_xmsg.cpp): tells the
 // game its friends' presence changed, or that friends came or went.
 void LiveRosterChanged(bool membership_changed);

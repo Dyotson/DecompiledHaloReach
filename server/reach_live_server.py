@@ -27,6 +27,8 @@ VERSION = 1
 
 (HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD, PUNCH, PUNCH_ACK, DATA, BYE, LIST, PEERS,
  PRESENCE, INVITE) = range(1, 15)
+MATCH_PUBLISH, MATCH_SEARCH, MATCH_RESULTS = 15, 16, 17  # matchmaking sessions
+MAX_MATCH_RECORD = 1300
 SESSION_INFO_SIZE = 0x3C  # XSESSION_INFO: session id, host XNADDR, key-exchange key
 MAX_PRESENCE_EXTRA = 1024
 
@@ -129,6 +131,8 @@ class ReachLive(asyncio.DatagramProtocol):
                 self.on_invite(peer, body)
             elif kind == BYE:
                 self.drop(peer, "left")
+            elif kind in (MATCH_PUBLISH, MATCH_SEARCH):
+                self.on_match(peer, kind, body)
         except (struct.error, IndexError, UnicodeDecodeError) as e:
             log.debug("bad packet from %s: %s", addr, e)
 
@@ -258,6 +262,36 @@ class ReachLive(asyncio.DatagramProtocol):
             start += len(part)
             if start >= len(entries) or not part:
                 break
+
+    # --- Matchmaking sessions (docs/online_plan.md section 5.4) ----------------------
+    # A player hosting a matchmaking session publishes it with a search key (the
+    # playlist); players searching with that key get the room's matching sessions. The
+    # session record is the client's (XSESSION_INFO, slots, properties, QoS data) and
+    # opaque here.
+
+    def on_match(self, peer, kind, body):
+        if kind == MATCH_PUBLISH:
+            # op u8: 0 withdraw, 1 publish (then search key u32 + the record)
+            if body[0] == 0:
+                peer.match = None
+            else:
+                (key,) = struct.unpack_from(">I", body, 1)
+                peer.match = (key, body[5:5 + MAX_MATCH_RECORD], time.monotonic())
+            return
+        # search key u32, request number u32. Reply: request number u32, count u16, then
+        # per session the host's id u32, XUID u64 and record (u16 length + bytes), newest
+        # first, as many as fit a datagram.
+        key, request = struct.unpack_from(">II", body, 0)
+        found = [p for p in self.room_peers(peer) if getattr(p, "match", None) and p.match[0] == key]
+        found.sort(key=lambda p: p.match[2], reverse=True)
+        entries, size = [], 6
+        for p in found:
+            entry = struct.pack(">IQH", p.id, p.xuid, len(p.match[1])) + p.match[1]
+            if size + len(entry) > 1400:
+                break
+            entries.append(entry)
+            size += len(entry)
+        self.send(peer.addr, MATCH_RESULTS, struct.pack(">IH", request, len(entries)) + b"".join(entries))
 
     def drop(self, peer, why):
         self.peers.pop(peer.id, None)

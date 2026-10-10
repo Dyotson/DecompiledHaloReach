@@ -16,6 +16,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 MAGIC = b"RLV1"
 HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD = 1, 2, 3, 4, 5, 6
 LIST, PEERS, PRESENCE, INVITE = 11, 12, 13, 14
+MATCH_PUBLISH, MATCH_SEARCH, MATCH_RESULTS = 15, 16, 17
 
 
 def free_port():
@@ -132,6 +133,26 @@ class ServerTest(unittest.TestCase):
         src, xuid, name_len = struct.unpack_from(">IQB", body)
         self.assertEqual((src, xuid, body[13:13 + name_len]), (a_id, 0x0009000000000021, b"Kat"))
         self.assertEqual(body[13 + name_len:], session)
+
+    def test_matchmaking_search_finds_published_sessions(self):
+        a = Client(self.addr, b"Emile", 0x0009000000000041, room=b"r4")
+        b = Client(self.addr, b"Noble", 0x0009000000000042, room=b"r4")
+        a_id, _ = a.hello(), b.hello()
+        a.send(MATCH_PUBLISH, struct.pack(">BI", 1, 101) + b"record")
+        time.sleep(0.2)
+        b.send(MATCH_SEARCH, struct.pack(">II", 101, 7))
+        kind, body = b.recv()
+        self.assertEqual(kind, MATCH_RESULTS)
+        request, count = struct.unpack_from(">IH", body)
+        self.assertEqual((request, count), (7, 1))
+        pid, xuid, size = struct.unpack_from(">IQH", body, 6)
+        self.assertEqual((pid, xuid, body[20:20 + size]), (a_id, 0x0009000000000041, b"record"))
+        b.send(MATCH_SEARCH, struct.pack(">II", 102, 8))  # another playlist
+        self.assertEqual(struct.unpack_from(">IH", b.recv()[1]), (8, 0))
+        a.send(MATCH_PUBLISH, b"\0")  # withdrawn
+        time.sleep(0.2)
+        b.send(MATCH_SEARCH, struct.pack(">II", 101, 9))
+        self.assertEqual(struct.unpack_from(">IH", b.recv()[1]), (9, 0))
 
     def test_unregistered_sender_is_told(self):
         d = Client(self.addr, b"Delta", 0x0009000000000004)

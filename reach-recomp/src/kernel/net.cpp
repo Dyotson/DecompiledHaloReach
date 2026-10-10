@@ -198,6 +198,9 @@ enum LiveType : uint8_t {
   kPeers,        // server -> client: the room's players with their presence
   kPresence,     // client -> server: our presence (friend state, joinable session, status)
   kInvite,       // client -> server -> invitee: a game invite with the inviter's session
+  kMatchPublish, // client -> server: our matchmaking session (live_xmsg.cpp)
+  kMatchSearch,  // client -> server: matchmaking sessions for a playlist
+  kMatchResults, // server -> client
 };
 // XNADDR.ina of a player on a Reach Live server: 0xF0000000 | the id the server gave
 // it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.
@@ -485,6 +488,14 @@ class VNet {
     Store32(body.data() + 4, uint32_t(xuid));
     std::memcpy(body.data() + 8, session_info, 0x3C);
     SendLive(server_, kInvite, body);
+  }
+
+  void SendMatch(LiveType type, const std::vector<uint8_t>& body) {
+    {
+      std::lock_guard<std::mutex> lock(mutex_);
+      if (!live_id_) return;
+    }
+    SendLive(server_, type, body);
   }
 
   bool TakeInvite(reach::LiveInvite& out) {
@@ -894,6 +905,9 @@ class VNet {
         reach::LiveInviteReceived(invite);
         return;
       }
+      case kMatchResults:
+        if (from_server) reach::LiveMatchResults(p, n);
+        return;
       case kPeers: {
         // Part header: total u16, first index u16, count u16; then the entries.
         if (!from_server || n < 6) return;
@@ -1056,6 +1070,10 @@ void LiveSendInvite(uint64_t xuid, const uint8_t* session_info) {
 }
 
 bool LiveTakeInvite(LiveInvite& out) { return NetOn() && VNet::Get().TakeInvite(out); }
+
+void LiveSendMatch(bool search, const std::vector<uint8_t>& body) {
+  if (NetOn()) VNet::Get().SendMatch(search ? kMatchSearch : kMatchPublish, body);
+}
 }  // namespace reach
 
 #define REACH_NET_SDK(name) \
