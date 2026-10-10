@@ -17,6 +17,7 @@ import json
 import logging
 import os
 import random
+import signal
 import struct
 import time
 
@@ -400,6 +401,9 @@ async def main():
 
 
 if __name__ == "__main__":
+    # SIGTERM (docker stop) ends the server like Ctrl+C; as a container's first process
+    # it would otherwise be ignored.
+    signal.signal(signal.SIGTERM, signal.default_int_handler)
     try:
         asyncio.run(main())
     except KeyboardInterrupt:
