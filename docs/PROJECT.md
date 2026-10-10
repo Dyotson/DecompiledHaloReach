@@ -230,6 +230,23 @@ Check exact param names in `endpoints.json` before calling.
   - File Share through Reach Live: upload from Forge, browse a friend's share from the
     roster, download (`docs/online_plan.md` 5.3).
 
+- 2026-10-10 (night): **Windows build runs; README covers building and playing.**
+  - `tools/build_windows.sh` cross-compiles the patched SDK (Vulkan on) and the game with
+    clang/clang-cl + xwin and packages `reach-recomp/out/dist/windows`. Under Proton 10 the
+    game plays the intro and reaches the first-run Armory screen with the Vulkan backend.
+  - It first hung at startup in our RtlEnterCriticalSection: on Windows the runtime maps
+    guest addresses >= 0xE0000000 0x1000 bytes further on (64 KB mapping granularity), so
+    `base + addr` in our code missed the SDK's VdHSIOCalibrationLock (0xFFCAB000). All our
+    guest pointers now use `GuestPtr(base, addr)` (`src/platform/guest_memory.h`).
+    Found with gdb on the Wine process: the user-mode RSP of a thread blocked in a syscall
+    is in Wine's syscall frame (`*(gs:0x328) + 0x88`); scanning that stack for return
+    addresses and symbolizing them with a `/DEBUG` PDB named the waiting function.
+  - The SDK cross build needs the MSVC headers after clang's (`-idirafter`), or the SSE
+    intrinsics become undefined external functions.
+  - A fresh clone now builds with one configure + build (the first configure runs codegen).
+  - The README has requirements, Linux and Windows build steps, playing, running a Reach Live
+    server (Python or Docker; checked with podman) and troubleshooting.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

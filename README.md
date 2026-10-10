@@ -50,6 +50,7 @@ the game (see [Legal](#legal)).
 | --- | --- |
 | Codegen of `default.xex` + 4 Waves DLLs | Done (~24k functions, about 167 MB of C++) |
 | Native build (Linux, Clang) | Builds and links |
+| Windows build | Cross-compiled from Linux (`tools/build_windows.sh`); under Proton it plays the intro and reaches the menus with the Vulkan backend. Not yet tried on Windows itself |
 | Boot | Kernel init, threads, cache partitions, fibers, RSA signature checks |
 | Intro video | Plays |
 | Title screen and start menu | Render correctly with the patched GPU plugin (the SDK bug behind the black menu is described in `docs/menu_black_screen.md`) |
@@ -66,69 +67,161 @@ See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debuggi
 
 ## Requirements
 
-- Linux x86-64 with a Vulkan 1.3 GPU (Windows: the SDK ships a win-amd64 build of the same
-  nightly and our code is being made portable; not buildable yet)
-- Your own Halo: Reach Xbox 360 disc image (base version, no title update)
-- [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) **0.10.0.24 nightly** (`nightly-20261002-bd833a2a`; v0.10.0 lacks
-  atomic/fence fixes). Install prefix, for example `~/rexglue-sdk-nightly/0.10.0.24/linux-amd64`
-- Clang (tested with 23), CMake ≥ 3.25, Ninja, Python 3
+- **Linux x86-64** with a Vulkan 1.3 GPU (tested on AMD with Mesa RADV). About 8 GB of free
+  RAM per running game and 30 GB of disk (6.6 GB of extracted game files plus the build).
+  Windows builds are cross-compiled from Linux (see [Windows](#windows)).
+- **Your own copy of Halo: Reach** for Xbox 360 as a disc image (`.iso`, base version, no
+  title update).
+- **Tools:** Clang (tested with 23), CMake ≥ 3.25, Ninja, Python 3, Git, `unzip`.
+  Building the patched GPU plugin also needs the X11/XCB and Wayland development headers
+  (on Fedora: `libX11-devel libxcb-devel libXext-devel libXfixes-devel libXcursor-devel
+  libXi-devel libXrandr-devel libXScrnSaver-devel libXrender-devel libXtst-devel
+  wayland-devel`; on immutable systems, Homebrew's `libx11 libxcb libxext libxfixes
+  libxcursor libxi libxrandr libxscrnsaver libxrender libxtst xorgproto wayland` work too).
+- **[ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) 0.10.0.24 nightly**
+  (`nightly-20261002-bd833a2a`; later nightlies may not match the patches).
 - Optional, for reverse engineering: Ghidra 12.1.4 with
   [XEXLoaderWV](https://github.com/zeroKilo/XEXLoaderWV) and
-  [GhidraMCP](https://github.com/bethington/ghidra-mcp)
+  [GhidraMCP](https://github.com/bethington/ghidra-mcp).
 
-## Building
+## Building (Linux)
+
+All commands run from the repository root.
 
 ```sh
-# 1. Extract the game partition from your ISO (read-only on the ISO)
-python3 tools/xdvdfs_extract.py "Halo - Reach.iso" extract extracted/xbox360
+# 1. The ReXGlue SDK nightly, unpacked to ~/rexglue-sdk-nightly/0.10.0.24/linux-amd64
+mkdir -p ~/rexglue-sdk-nightly/0.10.0.24 && cd ~/rexglue-sdk-nightly/0.10.0.24
+curl -LO https://github.com/rexglue/rexglue-sdk/releases/download/nightly-20261002-bd833a2a/rexglue-sdk-0.10.0.24-dev.gbd833a2-linux-amd64.zip
+unzip rexglue-sdk-0.10.0.24-dev.gbd833a2-linux-amd64.zip   # creates linux-amd64/
+cd -
 
-# 2. Build the patched Xenos GPU plugin (the stock SDK one renders textures 256x too dark)
+# 2. The game files, extracted from your disc image (the image is only read)
+python3 tools/xdvdfs_extract.py "/path/to/Halo - Reach.iso" extract extracted/xbox360
+
+# 3. The patched Xenos GPU plugin: clones the SDK source to ~/rexglue-sdk-src, applies
+#    patches/rexglue-sdk/ and installs an overlay at ~/rexglue-sdk-patched (the stock
+#    plugin renders the menus black and lacks this project's 22 rendering fixes)
 tools/build_rexglue_sdk.sh
 
-# 3. Configure (codegen runs automatically as part of the build)
+# 4. Configure and build. The first configure runs codegen on your default.xex (the
+#    recompiled C++ goes to reach-recomp/generated/, a few minutes); the build compiles it.
 cmake -S reach-recomp -B reach-recomp/out/build/linux-nightly -G Ninja \
-  -DCMAKE_BUILD_TYPE=Release \
-  -DCMAKE_CXX_COMPILER=clang++ \
+  -DCMAKE_BUILD_TYPE=Release -DCMAKE_CXX_COMPILER=clang++ \
   -DCMAKE_PREFIX_PATH=$HOME/rexglue-sdk-nightly/0.10.0.24/linux-amd64
-
-# 4. Build
 ninja -C reach-recomp/out/build/linux-nightly
-
-# 5. Run for N seconds (logs go to /tmp/reach_run.log; the intro is skipped automatically)
-tools/run_reach.sh 60
 ```
 
-Game saves and the emulated cache partitions are stored under `~/.local/share/reach/`.
+## Playing
+
+```sh
+tools/play.sh                        # play
+tools/play.sh --resolution_scale=2   # render at 2304x1440 instead of 1152x720
+```
+
+- **Controls:** keyboard and mouse work out of the box next to any controller: WASD,
+  mouse look, left click fire, right click zoom, Space jump, Ctrl crouch, Q melee,
+  G grenade, E/R reload and action, Shift armor ability, 1/2 or the wheel to switch
+  weapons, Tab scoreboard, Esc menu ([`docs/input.md`](docs/input.md) has every binding).
+- **Settings** live in `reach-recomp/out/build/linux-nightly/reach.toml`, one `name =
+  value` per line, and in the in-game settings overlay (**F4**). For example:
+
+  ```toml
+  resolution_scale = 2
+  kbm_sensitivity = 3.0
+  live_server = "reach.example.org"   # Reach Live server (see below)
+  gamertag = "Noble Six"
+  ```
+
+- **Saves** (profile, Credits, Armory, maps, films) are in `~/.local/share/reach/`; the log
+  is `~/.local/share/reach/reach.log`.
+- Skip the intro video with Esc (Start); in menus Enter is A and Backspace is B.
+
+## Windows
+
+The Windows version is cross-compiled from Linux with clang-cl and lld-link, after the Linux
+build above (its codegen output is reused, and step 3 checks out the SDK source).
+`tools/build_windows.sh` builds the ReXGlue SDK for Windows from that source with this
+project's patches and the Vulkan backend (the SDK's prebuilt Windows GPU plugin has none),
+then the game, and packages it in `reach-recomp/out/dist/windows`:
+
+```sh
+# Homebrew's LLVM and lld provide clang, clang-cl and lld-link
+brew install llvm lld
+
+# The MSVC CRT and Windows SDK, unpacked by xwin (a release binary from
+# https://github.com/Jake-Shadle/xwin/releases, or cargo install xwin).
+# Running it means accepting Microsoft's license.
+xwin --accept-license splat --output ~/.local/opt/xwin/sdk
+
+tools/build_windows.sh
+```
+
+On Windows, copy `reach-recomp/out/dist/windows` anywhere, install the Microsoft Visual C++
+2015-2022 x64 redistributable, and run it with your extracted game files:
+
+```bat
+reach.exe --game_data_root=C:\path\to\extracted\xbox360
+```
+
+`reach.toml` next to `reach.exe` takes the same settings as on Linux; `gpu_backend =
+"vulkan"` (the default) uses the backend with this project's fixes, `"d3d12"` the SDK's
+Direct3D 12 one. Saves and the Reach Live identity go to `Documents\reach`.
+So far the Windows build is tested under Proton on Linux, not on Windows itself.
 
 ## Playing online (Reach Live)
 
-Anyone can run a server; it needs Python 3 and one open UDP port:
+Reach Live is a small server that stands in for Xbox LIVE and Bungie's services. With it
+the game signs in to an emulated Xbox LIVE: everyone on the server is your friend,
+friends in a game show up in the lobby roster, **X** joins them and **Invite to Party** in a
+friend's player menu brings them to you; System Link (**Y**, Select Network) lists
+everyone's System Link games. Credits, ranks and Armory unlocks sync to the server, and
+File Share uploads and downloads go through it.
+
+**Joining a server:** add `live_server = "host"` (or `"host:port"`) to `reach.toml`, or run
+`REACH_SERVER=host tools/play.sh`. Your gamertag is in
+`~/.local/share/reach/4D53085B/live_identity.txt` (created on the first online run; edit it
+or set `gamertag`). `live_room = "name"` keeps a group of players to themselves;
+`live_signin = false` turns the Xbox LIVE emulation off (System Link only).
+
+**Running a server** needs Python 3 (no packages) or Docker:
 
 ```sh
 python3 server/reach_live_server.py --port 21100 --http-port 21101 --data-dir reach_live_data
-# or: docker build -t reach-live server/ &&
-#     docker run -p 21100:21100/udp -p 21101:21101 -v reach-live-data:/data reach-live
+# or
+docker build -t reach-live server/
+docker run -d -p 21100:21100/udp -p 21101:21101 -v reach-live-data:/data reach-live
 ```
 
-The data directory keeps players' progression and File Share. `--rate-limit` caps what
-the server relays per player (64 KB/s by default; a match needs a few KB/s).
+- Open **UDP 21100** (game traffic, rendezvous and relay) and **TCP 21101** (Bungie's
+  services: rewards sync, File Share, presence; also a JSON status page at `/status`).
+- The data directory keeps players' progression and File Share files.
+- Players connect directly to each other through UDP hole punching; when their routers
+  don't allow it the server relays the game (a few KB/s per player; `--rate-limit` caps it,
+  64 KB/s per player by default). Players behind strict NATs can forward one UDP port and
+  set `REACH_NET_PORT` to it.
+- Protocol and design: [`docs/online_plan.md`](docs/online_plan.md) section 5.
 
-Players point the game at it, in `reach.toml` next to the executable (or the F4 settings
-overlay, "Network/Reach Live"):
+## Developer tools
 
-```toml
-live_server = "your.server.org"   # host[:port], port 21100 by default
-gamertag = "Noble Six"             # optional
-```
+- `tools/run_reach.sh SECONDS` runs a time-limited test that skips the intro (logs in
+  `/tmp/reach_run.log`).
+- `tools/live_session.sh DIR` / `tools/live_step.sh DIR WAIT INPUT...` drive a game from a
+  script (input FIFO, frame dumps); `tools/live_shot.sh DIR` saves what the window shows.
+- `tools/system_link_pair.sh DIR_A DIR_B` starts two games on one machine in a System Link
+  lobby (with `REACH_SERVER`, through a Reach Live server).
+- `server/test_reach_live_server.py`, `server/test_reach_live_lsp.py`: server tests.
+- [`docs/PROJECT.md`](docs/PROJECT.md) has the status log and debugging recipes (RenderDoc,
+  gdb, guest memory).
 
-or with `REACH_SERVER=your.server.org tools/run_reach.sh 3600`. The game then signs in to an
-emulated Xbox LIVE: everyone on the server is your friend, friends in a game show up in the
-lobby roster, X joins them, and "Invite to Party" in a friend's player menu brings them to
-you. System Link (Y, "Select Network") lists everyone's System
-Link games too. Your gamertag is in `~/.local/share/reach/4D53085B/live_identity.txt`
-(created on the first online run). `live_room` keeps a group of players to themselves;
-`live_signin = false` stays offline-style (System Link only). Details and the protocol:
-[`docs/online_plan.md`](docs/online_plan.md) section 5.
+## Troubleshooting
+
+- **Menus or textures are black / too dark:** the stock GPU plugin is loaded. Run
+  `tools/build_rexglue_sdk.sh` and use `tools/play.sh` (it loads the patched overlay).
+- **The game dies with SIGBUS at start:** `/dev/shm` is full of guest memory left by killed
+  games (5 GB each); `tools/play.sh` removes orphaned `/dev/shm/xenia_memory_*` files when it
+  exits, or delete the ones no running game uses.
+- **No online players:** check that the server's UDP port is reachable and that both
+  players use the same `live_room`; the server's `/status` page lists who is connected.
 
 ## Repository layout
 
@@ -139,7 +232,7 @@ Link games too. Your gamertag is in `~/.local/share/reach/4D53085B/live_identity
 | `reach-recomp/src/` | Our runtime code: app setup, kernel overrides, cross-DLL thunks |
 | `reach-recomp/generated/` | Codegen output. **Not committed** here (translated game code), except the SDK's `rexglue.cmake`. The maintainer keeps a private copy, synced with `tools/sync_generated_repo.sh` |
 | `patches/rexglue-sdk/` | Fixes we carry on top of the ReXGlue SDK (built by `tools/build_rexglue_sdk.sh`) |
-| `server/` | Reach Live, the self-hostable online server |
+| `server/` | Reach Live, the self-hostable online server (and its Dockerfile) |
 | `tools/` | Extraction, analysis, run and debug tooling (`tools/renderdoc/`: GPU capture analysis) |
 | `docs/` | Project log, debugging recipes, reverse-engineering notes |
 | `docs/symbols/` | Function names recovered in Ghidra (`address,name` CSV) |
