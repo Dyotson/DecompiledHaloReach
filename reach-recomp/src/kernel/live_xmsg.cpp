@@ -20,6 +20,9 @@
 //   XSESSION_INFO, from what each player published.
 // - XNetQosListen / XNetQosLookup: the host's game description travels with its
 //   presence; lookups are answered from the roster.
+// - XInviteSend / XInviteGetAcceptedInfo (0xFC/0x50002, 0x58023): "Invite to Party"
+//   goes through the server to the friend, whose game accepts it (live_accept_invites)
+//   and joins our session.
 // - XNetLogonGetTitleID / XNetLogonGetMachineID: the SDK stubs return garbage.
 //
 // Everything else goes to the SDK. REACH_NETTRACE=1 logs every XMsg call (as net.cpp
@@ -29,6 +32,7 @@
 #include "identity.h"
 #include "live.h"
 
+#include <rex/cvar.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -51,6 +55,10 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+REXCVAR_DEFINE_BOOL(live_accept_invites, true, "Network/Reach Live",
+                    "Accept game invites from other players at once (there is no Xbox Guide "
+                    "to accept them in); the game declines them itself while busy");
 
 namespace {
 
@@ -250,6 +258,7 @@ std::mutex sessions_mutex;
 std::unordered_map<uint32_t, HostedSession> hosted_sessions;  // by session object
 std::unordered_map<uint64_t, std::vector<uint8_t>> qos_data;  // XNetQosListen data by key id
 uint64_t session_order = 0;
+uint8_t joined_session[kSessionInfoSize] = {};  // the last session we joined as a guest
 
 uint64_t SessionId(const uint8_t* info) {
   return uint64_t(Load32(info)) << 32 | Load32(info + 4);
@@ -295,7 +304,12 @@ void PublishPresenceLocked() {
 void XSessionCreate(uint8_t* base, uint32_t buffer) {
   const uint32_t object = Load32(base + buffer), flags = Load32(base + buffer + 4);
   const uint32_t info_ptr = Load32(base + buffer + 20), nonce_ptr = Load32(base + buffer + 24);
-  if (!(flags & kSessionHost) || !info_ptr) return;
+  if (!info_ptr) return;
+  if (!(flags & kSessionHost)) {  // joining someone's session: remember it for invites
+    std::lock_guard<std::mutex> lock(sessions_mutex);
+    std::memcpy(joined_session, base + info_ptr, kSessionInfoSize);
+    return;
+  }
   HostedSession s{};
   s.flags = flags;
   s.max_public = Load32(base + buffer + 8);
@@ -411,6 +425,63 @@ uint32_t XSessionSearchById(uint8_t* base, uint32_t buffer) {
   return XSessionSearch(base, {id}, Load32(base + buffer + 16), Load32(base + buffer + 12));
 }
 
+// The session a friend we invite should join: the newest joinable session we host, else
+// the one we joined. False when there is none.
+bool InviteSession(uint8_t* out) {
+  std::lock_guard<std::mutex> lock(sessions_mutex);
+  const HostedSession* best = nullptr;
+  for (const auto& [object, s] : hosted_sessions) {
+    if ((s.flags & kSessionUsesPresence) && (!best || s.order > best->order)) best = &s;
+  }
+  if (best) {
+    std::memcpy(out, best->info, kSessionInfoSize);
+    return true;
+  }
+  std::memcpy(out, joined_session, kSessionInfoSize);
+  for (size_t i = 0; i < 8; ++i) {
+    if (out[i]) return true;
+  }
+  return false;
+}
+
+// XInviteSend (0xFC/0x50002): an XLIVEBASE_ASYNC_MESSAGE whose marshalled request is
+// (big-endian) user index, invitee count, invitee XUIDs, display text, message handle.
+uint32_t XInviteSend(uint8_t* base, uint32_t message) {
+  if (!message) return kInvalidArg;
+  const uint32_t task = Load32(base + message);
+  if (!task) return kInvalidArg;
+  const uint32_t request = Load32(base + task + 0x18), size = Load32(base + task + 0x1C);
+  if (!request || size < 8) return kInvalidArg;
+  const uint32_t count = std::min<uint32_t>(Load32(base + request + 4), (size - 8) / 8);
+  uint8_t session[kSessionInfoSize];
+  if (!InviteSession(session)) return 0x80155206;  // X_ONLINE_E_SESSION_NOT_FOUND
+  for (uint32_t i = 0; i < count; ++i) {
+    const uint64_t xuid =
+        uint64_t(Load32(base + request + 8 + 8 * i)) << 32 | Load32(base + request + 12 + 8 * i);
+    reach::LiveSendInvite(xuid, session);
+    REXLOG_INFO("REACH_LIVE: invite sent to {:016X}", xuid);
+  }
+  return kSuccess;
+}
+
+// XInviteGetAcceptedInfo (0xFC/0x58023): (user index, X_INVITE_INFO*) in an argument
+// list. X_INVITE_INFO: invitee XUID, inviter XUID, title id, the session (XSESSION_INFO),
+// from-game-invite flag.
+uint32_t XInviteGetAcceptedInfo(uint8_t* base, uint32_t args) {
+  if (!args) return kInvalidArg;
+  const uint32_t info = ArgPointer(base, args, 1);
+  reach::LiveInvite invite;
+  if (!info || !reach::LiveTakeInvite(invite)) return 0x80155206;  // session not found
+  std::memset(base + info, 0, 0x54);
+  Store64(base + info, reach::IdentityXuid());
+  Store64(base + info + 8, invite.inviter_xuid);
+  Store32(base + info + 0x10, kTitleId);
+  std::memcpy(base + info + 0x14, invite.session, kSessionInfoSize);
+  Store32(base + info + 0x50, 1);
+  REXLOG_INFO("REACH_LIVE: joining {}'s game", invite.inviter);
+  return kSuccess;
+}
+
 // Our part of a message: kNotOurs lets the SDK answer (after any bookkeeping above).
 uint32_t Handle(uint8_t* base, uint32_t app, uint32_t message, uint32_t arg1, uint32_t arg2) {
   if (!reach::LiveSignin()) return kNotOurs;
@@ -424,6 +495,10 @@ uint32_t Handle(uint8_t* base, uint32_t app, uint32_t message, uint32_t arg1, ui
         return XFriendsCreateEnumerator(base, arg2);
       case 0x00058019:
         return XPresenceCreateEnumerator(base, arg2);
+      case 0x00050002:
+        return XInviteSend(base, arg1);
+      case 0x00058023:
+        return XInviteGetAcceptedInfo(base, arg2);
       case 0x0005801E:  // XPresenceSubscribe: every room player's presence is known
       case 0x00058044:  // XPresenceUnsubscribe
         return kSuccess;
@@ -512,6 +587,16 @@ extern "C" REX_FUNC(__imp__XMsgStartIORequestEx) {
 }
 
 namespace reach {
+// An invite arrived: accept it for the player (XN_LIVE_INVITE_ACCEPTED, parameter: the
+// user index); the game then asks XInviteGetAcceptedInfo for it and joins, or tells the
+// player it can't right now.
+void LiveInviteReceived(const LiveInvite& invite) {
+  REXLOG_INFO("REACH_LIVE: {} invited you{}", invite.inviter,
+              REXCVAR_GET(live_accept_invites) ? "; accepting" : " (live_accept_invites is off)");
+  if (!LiveSignin() || !REXCVAR_GET(live_accept_invites)) return;
+  if (auto* kernel = REX_KERNEL_STATE()) kernel->BroadcastNotification(0x02000002, 0);
+}
+
 // Notifications for the game's friends code (XN_FRIENDS_PRESENCE_CHANGED,
 // XN_FRIENDS_FRIEND_ADDED; the parameter is the user index).
 void LiveRosterChanged(bool membership_changed) {

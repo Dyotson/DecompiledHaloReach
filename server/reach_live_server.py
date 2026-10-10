@@ -26,7 +26,7 @@ MAGIC = b"RLV1"
 VERSION = 1
 
 (HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD, PUNCH, PUNCH_ACK, DATA, BYE, LIST, PEERS,
- PRESENCE) = range(1, 14)
+ PRESENCE, INVITE) = range(1, 15)
 SESSION_INFO_SIZE = 0x3C  # XSESSION_INFO: session id, host XNADDR, key-exchange key
 MAX_PRESENCE_EXTRA = 1024
 
@@ -111,6 +111,8 @@ class ReachLive(asyncio.DatagramProtocol):
                 self.on_list(peer, addr)
             elif kind == PRESENCE:
                 self.on_presence(peer, body)
+            elif kind == INVITE:
+                self.on_invite(peer, body)
             elif kind == BYE:
                 self.drop(peer, "left")
         except (struct.error, IndexError, UnicodeDecodeError) as e:
@@ -188,6 +190,21 @@ class ReachLive(asyncio.DatagramProtocol):
             log.info("presence #%d %r state %08X session %s %r", peer.id, peer.name, state,
                      session[:8].hex(), status)
         peer.state, peer.session, peer.status, peer.extra = state, session, status, extra
+
+    def on_invite(self, src, body):
+        """A game invite: target XUID u64 + the inviter's XSESSION_INFO. Delivered to
+        that player in the same room as: inviter id u32, inviter XUID u64, gamertag
+        (u8 length + UTF-8), XSESSION_INFO."""
+        (target,) = struct.unpack_from(">Q", body, 0)
+        session = body[8:8 + SESSION_INFO_SIZE]
+        if len(session) != SESSION_INFO_SIZE:
+            return
+        name = src.name.encode()
+        for peer in self.room_peers(src):
+            if peer.xuid == target:
+                log.info("invite #%d %r -> #%d %r", src.id, src.name, peer.id, peer.name)
+                self.send(peer.addr, INVITE, struct.pack(">IQB", src.id, src.xuid, len(name)) +
+                          name + session)
 
     def on_list(self, src, addr):
         """The room's players (the asker first): the friends list of a Live player.

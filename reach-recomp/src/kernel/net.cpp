@@ -202,6 +202,7 @@ enum LiveType : uint8_t {
   kList,         // client -> server: who is in the room
   kPeers,        // server -> client: the room's players with their presence
   kPresence,     // client -> server: our presence (friend state, joinable session, status)
+  kInvite,       // client -> server -> invitee: a game invite with the inviter's session
 };
 // XNADDR.ina of a player on a Reach Live server: 0xF0000000 | the id the server gave
 // it. 240.0.0.0/8 is reserved, so it never collides with a LAN address.
@@ -481,6 +482,22 @@ class VNet {
       presence_.insert(presence_.end(), extra.begin(), extra.begin() + std::min<size_t>(extra.size(), 1024));
     }
     SendPresence();
+  }
+
+  void SendInvite(uint64_t xuid, const uint8_t* session_info) {
+    std::vector<uint8_t> body(8 + 0x3C);
+    Store32(body.data(), uint32_t(xuid >> 32));
+    Store32(body.data() + 4, uint32_t(xuid));
+    std::memcpy(body.data() + 8, session_info, 0x3C);
+    SendLive(server_, kInvite, body);
+  }
+
+  bool TakeInvite(reach::LiveInvite& out) {
+    std::lock_guard<std::mutex> lock(mutex_);
+    if (!pending_invite_.inviter_xuid) return false;
+    out = pending_invite_;
+    pending_invite_ = {};
+    return true;
   }
 
   // Virtual IP of a peer's XNADDR.
@@ -865,6 +882,22 @@ class VNet {
         Deliver(vip, Load16(p + 4), Load16(p + 6), p + 8, n - 8);
         return;
       }
+      case kInvite: {
+        // inviter id u32, inviter XUID u64, gamertag (u8 length + bytes), XSESSION_INFO
+        if (!from_server || n < 13) return;
+        reach::LiveInvite invite;
+        invite.inviter_xuid = uint64_t(Load32(p + 4)) << 32 | Load32(p + 8);
+        const size_t name_size = p[12];
+        if (13 + name_size + 0x3C > n) return;
+        invite.inviter.assign(reinterpret_cast<const char*>(p + 13), name_size);
+        std::memcpy(invite.session, p + 13 + name_size, 0x3C);
+        {
+          std::lock_guard<std::mutex> lock(mutex_);
+          pending_invite_ = invite;
+        }
+        reach::LiveInviteReceived(invite);
+        return;
+      }
       case kPeers: {
         // Part header: total u16, first index u16, count u16; then the entries.
         if (!from_server || n < 6) return;
@@ -991,6 +1024,7 @@ class VNet {
   std::unordered_map<uint32_t, LivePeer> live_peers_;
   std::unordered_map<uint32_t, uint32_t> live_id_by_vip_;
   std::vector<uint8_t> presence_;  // body of our last presence message
+  reach::LiveInvite pending_invite_;
   std::vector<reach::LiveFriend> roster_, roster_parts_;
   uint16_t roster_parts_seen_ = 0;
   int roster_changed_ = 0;  // 1: presence changed, 2: players came or went; LiveLoop reports it
@@ -1022,6 +1056,12 @@ void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::str
 }
 
 void LiveSelfXnAddr(uint8_t* xnaddr) { VNet::Get().WriteSelfXnAddr(xnaddr); }
+
+void LiveSendInvite(uint64_t xuid, const uint8_t* session_info) {
+  if (NetOn()) VNet::Get().SendInvite(xuid, session_info);
+}
+
+bool LiveTakeInvite(LiveInvite& out) { return NetOn() && VNet::Get().TakeInvite(out); }
 }  // namespace reach
 
 #define REACH_NET_SDK(name) \

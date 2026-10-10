@@ -15,7 +15,7 @@ import unittest
 HERE = os.path.dirname(os.path.abspath(__file__))
 MAGIC = b"RLV1"
 HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD = 1, 2, 3, 4, 5, 6
-LIST, PEERS, PRESENCE = 11, 12, 13
+LIST, PEERS, PRESENCE, INVITE = 11, 12, 13, 14
 
 
 def free_port():
@@ -120,6 +120,18 @@ class ServerTest(unittest.TestCase):
             seen[pid] = (name, state, info, status, extra)
         self.assertEqual(list(seen)[0], b_id)  # the asker first
         self.assertEqual(seen[a_id], (b"Carter", 0x13, session, b"lobby", b"qos!"))
+
+    def test_invite_reaches_the_invitee(self):
+        a = Client(self.addr, b"Kat", 0x0009000000000021, room=b"r3")
+        b = Client(self.addr, b"Jun", 0x0009000000000022, room=b"r3")
+        a_id, _ = a.hello(), b.hello()
+        session = bytes(range(0x3C))
+        a.send(INVITE, struct.pack(">Q", 0x0009000000000022) + session)
+        kind, body = b.recv()
+        self.assertEqual(kind, INVITE)
+        src, xuid, name_len = struct.unpack_from(">IQB", body)
+        self.assertEqual((src, xuid, body[13:13 + name_len]), (a_id, 0x0009000000000021, b"Kat"))
+        self.assertEqual(body[13 + name_len:], session)
 
     def test_unregistered_sender_is_told(self):
         d = Client(self.addr, b"Delta", 0x0009000000000004)

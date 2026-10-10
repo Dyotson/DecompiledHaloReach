@@ -340,7 +340,9 @@ Protocol (UDP, big-endian; every packet starts with `RLV1` and a type byte):
 | 6 forward | server → client | source player id u32, its public IP u32 + port u16, its LAN IP u32 + port u16, guest ports, payload |
 | 7 punch / 8 punch-ack | player ↔ player | sender id u32, receiver id u32, server epoch u16 |
 | 9 data | player ↔ player | sender id u32, guest ports, payload |
-| 10 bye, 11 list / 12 peers | | leaving; who is in the room |
+| 10 bye, 11 list / 12 peers | | leaving; who is in the room (with presence, section 5.2) |
+| 13 presence | client → server | friend state u32, XSESSION_INFO, status (u8 length + UTF-8), extras (slots, QoS data) |
+| 14 invite | client → server → invitee | target XUID u64 + XSESSION_INFO; delivered as inviter id u32, XUID u64, gamertag, XSESSION_INFO |
 
 Measured on one machine (relay forced with `REACH_SERVER_RELAY=1`): a Firefight match between
 two players is about 4 KB/s and 60 packets/s through the server in total, so a small VPS can
@@ -422,6 +424,7 @@ stubs. Every player in our room on the server is a friend.
 | XSessionCreate / Delete / Modify / Join / Leave (0xFB/0xB0010-0xB0013, 0xB0018) | sessions for lobbies and parties | for a session we host: an online peer session id (0x80 type), our XNADDR and a random key in XSESSION_INFO; the newest joinable presence session is published with its slots. Leave (0xB0013) had no SDK handler |
 | XSessionSearchByIds / ByID (0xFB/0xB0060, 0xB001B) | turns friends' session ids into XSESSION_INFO (host XNADDR, key) | the session each player published |
 | XNetQosListen / XNetQosLookup | the host publishes its game description (the same bitstream as the System Link reply, 0x98 bytes); joiners probe it for "In Firefight Lobby 1/16" | the data travels with the host's presence; lookups are answered at once (XNQOS from `SystemHeapAlloc`, released by the SDK's XNetQosRelease) |
+| XInviteSend (0xFC/0x50002) / XInviteGetAcceptedInfo (0xFC/0x58023) | "Invite to Party" in the player menu; on XN_LIVE_INVITE_ACCEPTED (0x02000002) the notification loop asks for the accepted invite and joins its session | the invite goes through the server (UDP `invite`, type 14) with our joinable session (hosted, else joined); the friend's client accepts it at once (`live_accept_invites`, on by default: there is no Xbox Guide to accept in) and answers the X_INVITE_INFO. Verified: Kat invites Jun from the roster, Jun joins her Firefight lobby |
 | XamUserAreUsersFriends, XNetLogonGetTitleID / MachineID | | from the roster; 0x4D53085B; 0xFA000000 + XUID |
 
 Presence on the server: each client sends its friend state, the XSESSION_INFO of its joinable

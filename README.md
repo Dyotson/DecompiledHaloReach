@@ -111,7 +111,8 @@ gamertag = "Noble Six"             # optional
 
 or with `REACH_SERVER=your.server.org tools/run_reach.sh 3600`. The game then signs in to an
 emulated Xbox LIVE: everyone on the server is your friend, friends in a game show up in the
-lobby roster, and X joins them. System Link (Y, "Select Network") lists everyone's System
+lobby roster, X joins them, and "Invite to Party" in a friend's player menu brings them to
+you. System Link (Y, "Select Network") lists everyone's System
 Link games too. Your gamertag is in `~/.local/share/reach/4D53085B/live_identity.txt`
 (created on the first online run). `live_room` keeps a group of players to themselves;
 `live_signin = false` stays offline-style (System Link only). Details and the protocol:

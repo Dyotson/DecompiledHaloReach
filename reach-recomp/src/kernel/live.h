@@ -38,6 +38,19 @@ void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::str
 // This instance's XNADDR (36 bytes, guest layout).
 void LiveSelfXnAddr(uint8_t* xnaddr);
 
+// Game invites through the server: send one to a player in the room (with our joinable
+// session), and take the last one received (false when none is waiting).
+struct LiveInvite {
+  uint64_t inviter_xuid = 0;
+  std::string inviter;
+  uint8_t session[0x3C] = {};
+};
+void LiveSendInvite(uint64_t xuid, const uint8_t* session_info);
+bool LiveTakeInvite(LiveInvite& out);
+
+// Called by the network thread when an invite arrives (live_xmsg.cpp).
+void LiveInviteReceived(const LiveInvite& invite);
+
 // Called by the network thread when the roster changed (live_xmsg.cpp): tells the
 // game its friends' presence changed, or that friends came or went.
 void LiveRosterChanged(bool membership_changed);
