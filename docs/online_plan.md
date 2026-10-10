@@ -496,34 +496,52 @@ writes them under `DATA_DIR/storage/` and the server serves them as stored files
 file is in the repository: the generator builds every file from scratch. What it needs
 from the operator's game is read from the operator's copy: the hash salt and the built-in
 network configuration (from a running client), the map signatures (from the .map files)
-and the game types (saved in game and uploaded to the server's File Share).
+and the game and map variants (saved in game and uploaded to the server's File Share).
 
 ```
 python3 server/reach_live_hoppers.py DATA_DIR --from-client PID     # once; PID = a running client
-#   in game: Custom Game, Game Type, pick one, Game Options, X "Save Game Type", then in
-#   the game type list X "File Options", "Upload to File Share" (to this server)
+#   game types: Custom Game, Game Type, pick one, Game Options, X "Save Game Type", then in
+#     the game type list X "File Options", "Upload to File Share" (to this server)
+#   maps: Forge, pick the map, save it unchanged ("Save As", named after the map), then in
+#     the map list X "File Options", "Upload to File Share"
 python3 server/reach_live_hoppers.py DATA_DIR --maps extracted/xbox360/maps
 ```
 
 `DATA_DIR/playlists.json` replaces the built-in playlist list (`DEFAULT_PLAYLISTS` in the
 generator: one "Free For All" playlist, 2-8 players, the uploaded game type "Slayer" on
-Sword Base, Zealot and Powerhouse). Clients pick up new files when they restart.
+Sword Base, Zealot and Powerhouse). Each game names a game type and a map; its map variant
+is the uploaded file named after the map unless `"map_variant"` names another. Games whose
+variants are not on the File Share are left out with a warning. Clients pick up new files
+when they restart.
 
-**Status (two instances on one machine, one server).**
+**Status (two instances on one machine, one server): working.** Both press START
+MATCHMAKING on the "Free For All" playlist; within about 40 s they find each other, merge,
+pass arbitration and host selection, load Sword Base ("Starting match… Brace for carnage")
+and play Slayer together: both are in the game with the timer running and the scoreboard
+lists Carter and Jun. Not checked yet: the end of a match (stats writes, post-game, the
+next round), more than two players, team playlists.
 
-- Works: the lobby lists the server's playlists and descriptions and shows "Ready"; START
-  MATCHMAKING shows "Searching… Looking for player"; each instance hosts a matchmaking
-  session, publishes it on the server and finds the other's through
-  XSessionSearchWeighted; QoS lookups answer with the host's data; the newer group joins
-  the older group's session (both see two members, the game traffic flows).
-- Not yet: the merged group never starts a match. The host enters the arbitration state
-  and waits for every member to acknowledge the latest session update and report status
-  bit 5 (`sub_8229C7F8(session, 2, 5)` in `sub_82287DE8`); the member's acknowledged
-  update number stays one behind the host's (host 4, member 3), its status bits stay 0,
-  and its lifecycle stays in assemble-match (12) because it never sees the host's
-  progress byte change. After 30 s (network configuration +0x4CC) the host fails with
-  reason 0x11, both recycle (state 8) and search again. Why the member does not apply
-  the last update is open; the friend-join path (custom games) replicates sessions fine.
+Three things blocked it, all in the data rather than the client:
+
+1. The ping limit of the search stages (hopper +0x134…, below) was 0, so every session
+   found was rejected (`sub_822CD310`).
+2. The member dropped every session parameters update: the "matchmaking-hopper"
+   parameter (the host's hopper, `sub_822E2B70` / `sub_822E31D0`) carries the hopper's
+   voting block (+0x98…+0xB0), whose decoder `sub_822D9508` wants +0xAC in 1–30 while the
+   host's own check (`sub_82291260`) allowed 0. With the whole update rejected, the member
+   stayed one update behind and the host timed out in arbitration (reason 0x11 after 30 s,
+   network configuration +0x4CC). Found by hooking the per-parameter decoders (the
+   parameter table at `*0x83150EA0`, 0x28-byte entries {flag, name, encode, decode, …,
+   size}; the update is decoded by `sub_822AB588`).
+3. A multiplayer game only starts with a map variant: `sub_82280140`, called when the
+   countdown ends, needs both the game variant and the map variant parameters (and the
+   map variant's map id at +0x2B4 to match the map). Without one, the state machine went
+   in-match → end of match → recycle within a second. So playlists use variant source 0
+   (game and map variant files).
+
+The client side only gained XUserMuteListQuery (XLiveBase 0x5800E, answered "not muted"):
+Reach asks it for every other player several times a second during a match, and the SDK
+failed and logged every call.
 
 #### Download and validation
 
@@ -581,10 +599,10 @@ u16 image, …}), 32 hoppers of 0x458 bytes at +0x448. Hopper fields:
 | +0x84 | i32 account type: 0 / 1 / 2 = any |
 | +0x88 – +0x8C | bytes: requirement applies to every party member rather than one |
 | +0x93, +0x94, +0xB6, +0xB8 | bytes: further start checks (0x35, 0x25, 0x2D, 0x34) |
-| +0x98, +0xA0, +0xA4, +0xA8, +0xAC | i32 voting: options per vote (1–3), rounds (1–8), … (`sub_82291260`) |
+| +0x98 … +0xB0 | voting: i32 options per vote (1–3), +0x9C (0–4), rounds (1–8), +0xA4 (0–8), +0xA8 (0–4), +0xAC (1–30), byte +0xB0 (3 bits); checked by `sub_82291260` and, stricter, by the other players' decoder of the "matchmaking-hopper" session parameter (`sub_822D9508`) |
 | +0x130 | i32 seconds before the search widens to its next stage |
 | +0x134 | four search stages of 0x94 bytes (`sub_822D0760`): per stage skill / range limits (+0x04 byte + i32, +0x0C byte + float, +0x14 byte + 3 floats, +0x24 / +0x25 bytes) and the ping limit, base + step × increment (+0x28, +0x2C; `sub_822D0D68`). A limit of 0 ms rejects every session found (`sub_822CD310`) |
-| +0x384 | byte, variant source: 0 game and map variant files, 1 or 2 game variant only, 3 none (keeps the session's previous variant; the first game of a session reads a null pointer in `sub_8227FAA0`) |
+| +0x384 | byte, variant source: 0 game and map variant files, 1 or 2 game variant only (the match then never starts: `sub_82280140` needs a map variant), 3 none (keeps the session's previous variant; the first game of a session reads a null pointer in `sub_8227FAA0`) |
 | +0x385 | byte, no teams |
 | +0x388 / +0x38C | i32 min / max players without teams (`sub_82286418`, `sub_8227C040`); with a minimum of 1 a lone player's match starts at once |
 | +0x394, +0x39C… | teams: minimum team count and 8 team blocks of 0x10 bytes (sizes) |
@@ -652,4 +670,11 @@ candidate per result (`sub_8231CD68`; candidates at `*0x83559218`, 0x1308 bytes,
 byte at +0x58), probes it with XNetQosLookup (RTT and bandwidth land at candidate
 +0x6C…+0x80) and joins a candidate whose median RTT is within the stage's ping limit
 (`sub_822CD310`), through the same deferred join record (0x832FAD50) a friend join uses.
+
+After the merge the host runs arbitration (13: every member must report the current
+session update and status bit 5, `sub_8229C7F8`), host selection (14) and prepare-map (15:
+"Loading game and map data", then the countdown), and `sub_8228C200` (in-match) starts the
+game through `sub_82280140`. The matchmaking progress parameter the members follow is set
+by `sub_822A2FD0`: 0xB searching, 0xC–0xF assembly and arbitration, 0x10 countdown, 0x11
+set by `sub_8228C200` when the game cannot start or has ended, then 0x12 and 0x13.
 

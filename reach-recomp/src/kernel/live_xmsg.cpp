@@ -723,6 +723,10 @@ uint32_t Handle(uint8_t* base, uint32_t app, uint32_t message, uint32_t arg1, ui
         return XInviteGetAcceptedInfo(base, arg2);
       case 0x0005801E:  // XPresenceSubscribe: every room player's presence is known
       case 0x00058044:  // XPresenceUnsubscribe
+      // XUserMuteListQuery {user index, XUID}: nobody is muted (the result stays false).
+      // In a matchmade game Reach asks it for every other player several times a second;
+      // the SDK fails it and logs each call.
+      case 0x0005800E:
         return kSuccess;
     }
   } else if (app == kAppXgi && arg1) {

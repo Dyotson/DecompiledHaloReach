@@ -139,9 +139,11 @@ def hopper_table(categories, hoppers):
         struct.pack_into(">iiiiii", t, o + 0x58, 0, 0, 0, 0, -128, 127)
         struct.pack_into(">ii", t, o + 0x70, h.get("min_party", 1), h.get("max_party", 16))
         struct.pack_into(">iiii", t, o + 0x78, -0x80000000, 0x7FFFFFFF, -1, 2)
-        # Voting (sub_82291260): options per vote, rounds.
-        struct.pack_into(">ii", t, o + 0x98, 1, 0)
-        struct.pack_into(">i", t, o + 0xA0, 1)
+        # Voting: options per vote (1-3), +0x9C (0-4), rounds (1-8), +0xA4 (0-8), +0xA8
+        # (0-4), +0xAC (1-30), +0xB0 (3 bits). The host checks them (sub_82291260) and
+        # sends them to the other players in the "matchmaking-hopper" session parameter,
+        # whose decoder (sub_822D9508) drops the whole update for a value out of range.
+        struct.pack_into(">iiiiii", t, o + 0x98, 1, 0, 1, 0, 0, 10)
         t[o + 0xB6] = 1
         # Four search stages of 0x94 bytes at +0x134 (sub_822D0760). The stage's ping
         # limit is base + step * increment (+0x28, +0x2C; sub_822D0D68), capped by the
@@ -157,9 +159,10 @@ def hopper_table(categories, hoppers):
 
 
 # Hopper +0x384, where a game's variants come from: 0 a game and a map variant file,
-# 1 or 2 a game variant file (the map's default layout), 3 none. With none the game keeps
-# the session's previous game variant, and the first game of a session crashes reading it.
-GAME_AND_MAP_VARIANT, GAME_VARIANT = 0, 1
+# 1 or 2 a game variant file only, 3 none. A multiplayer game only starts with both
+# (sub_82280140 needs the map variant parameter), and with none the first game of a
+# session crashes reading a null game variant.
+GAME_AND_MAP_VARIANT = 0
 
 GAME_SET_SIZE = 0xD404
 GAME_SET_ENTRY = 0xD4
@@ -241,6 +244,8 @@ DEFAULT_PLAYLISTS = {
                    {"game_variant": "Slayer", "map": "Powerhouse"}]},
     ],
 }
+# A game's map variant defaults to the File Share file named after its map (a map saved
+# unchanged from Forge). Games whose variants are not on the File Share are left out.
 
 
 def shared_variants(data_dir):
@@ -268,6 +273,9 @@ def shared_variants(data_dir):
     return out
 
 
+KIND = {"game_variant": 6, "map_variant": 5}  # File Share file types
+
+
 def game_variant_file(mpvr):
     """`gvar` v54 holds the bitstream that a saved game variant's `mpvr` v54 chunk holds
     after its hash (+0), padding and u32 size (+0x18)."""
@@ -286,25 +294,30 @@ def build(salt, signatures, network_configuration, playlists, variants):
     files["network_configuration_241.bin"] = blf(chunk(b"netc", 241, 1, network_configuration))
     hoppers = [dict(h) for h in playlists["playlists"]]
     for h in hoppers:
-        uses_maps = any(g.get("map_variant") for g in h["games"])
-        h["variant_source"] = GAME_AND_MAP_VARIANT if uses_maps else GAME_VARIANT
+        h["variant_source"] = GAME_AND_MAP_VARIANT
         entries = []
         for g in h["games"]:
+            names = {"game_variant": g["game_variant"], "map_variant": g.get("map_variant", g["map"])}
+            missing = [(key, name) for key, name in names.items()
+                       if (KIND[key], name.lower()) not in variants]
+            if missing:
+                print("playlist %r: left out %s on %s, no %s on the File Share" % (
+                    h["name"], g["game_variant"], g["map"],
+                    " or ".join("%s named %r" % (k.replace("_", " "), n) for k, n in missing)),
+                    file=sys.stderr)
+                continue
             entry = {"map": MAPS.get(g["map"], g["map"]), "weight": g.get("weight", 1)}
-            for key, kind, folder, version in (("game_variant", 6, "", 54),
-                                               ("map_variant", 5, "map_variants/", 31)):
-                if not g.get(key):
-                    continue
-                payload = variants.get((kind, g[key].lower()))
-                if payload is None:
-                    raise SystemExit("playlist %r: no %s named %r on the File Share"
-                                     % (h["name"], key.replace("_", " "), g[key]))
-                data = (game_variant_file(payload) if kind == 6
+            for key, folder, version in (("game_variant", "", 54), ("map_variant", "map_variants/", 31)):
+                payload = variants[(KIND[key], names[key].lower())]
+                data = (game_variant_file(payload) if key == "game_variant"
                         else blf(chunk(b"mvar", 31, 1, payload)))
-                name = file_name(g[key])
+                name = file_name(names[key])
                 files["%05u/%s%s_%03u.bin" % (h["id"], folder, name, version)] = data
                 entry[key] = (name, file_hash(salt, data))
             entries.append(entry)
+        if not entries:
+            raise SystemExit("playlist %r: none of its games has its variants on the File Share"
+                             % h["name"])
         data = blf(compressed_chunk(b"gset", 15, 1, game_set(entries, h["variant_source"])))
         files["%05u/game_set_015.bin" % h["id"]] = data
         h["game_set_hash"] = file_hash(salt, data)
