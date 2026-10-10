@@ -143,9 +143,16 @@ def hopper_table(categories, hoppers):
         struct.pack_into(">ii", t, o + 0x98, 1, 0)
         struct.pack_into(">i", t, o + 0xA0, 1)
         t[o + 0xB6] = 1
+        # Four search stages of 0x94 bytes at +0x134 (sub_822D0760). The stage's ping
+        # limit is base + step * increment (+0x28, +0x2C; sub_822D0D68), capped by the
+        # network configuration (100 ms); 0 rejects every session found.
+        for stage in range(4):
+            struct.pack_into(">ii", t, o + 0x134 + stage * 0x94 + 0x28, h.get("max_ping", 200), 0)
         t[o + 0x384] = h["variant_source"]
-        t[o + 0x385] = 1                    # no teams: the player count is +0x38C
-        struct.pack_into(">i", t, o + 0x38C, h.get("max_players", 8))
+        # No teams: a match needs +0x388 to +0x38C players (sub_82286418, sub_8227C040).
+        # With a minimum of 1 a lone player's match starts at once.
+        t[o + 0x385] = 1
+        struct.pack_into(">ii", t, o + 0x388, h.get("min_players", 2), h.get("max_players", 8))
     return bytes(t)
 
 

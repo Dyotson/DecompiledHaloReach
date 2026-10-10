@@ -493,19 +493,37 @@ Goal: Matchmaking on a Reach Live server with the server's own playlists. The pl
 title storage files the game downloads over HTTP from the server
 (`/storage/title/4d53085b/tracked/11860/default_hoppers/…`); `server/reach_live_hoppers.py`
 writes them under `DATA_DIR/storage/` and the server serves them as stored files. No Bungie
-file is in the repository: the generator builds every file from scratch, and the two values
-it needs from the operator's game (a hash salt and the map signatures) are read from the
-operator's copy.
+file is in the repository: the generator builds every file from scratch. What it needs
+from the operator's game is read from the operator's copy: the hash salt and the built-in
+network configuration (from a running client), the map signatures (from the .map files)
+and the game types (saved in game and uploaded to the server's File Share).
 
 ```
-python3 tools/guestmem.py dump PID 0x83AB0000 34 DATA_DIR/title_key.bin   # once, PID = a running client
+python3 server/reach_live_hoppers.py DATA_DIR --from-client PID     # once; PID = a running client
+#   in game: Custom Game, Game Type, pick one, Game Options, X "Save Game Type", then in
+#   the game type list X "File Options", "Upload to File Share" (to this server)
 python3 server/reach_live_hoppers.py DATA_DIR --maps extracted/xbox360/maps
 ```
 
-**Status.** With the generated files the Matchmaking lobby lists the server's playlists
-(PLAYLIST shows "TEAM SLAYER") instead of "The Halo: Reach server is unavailable". The
-game then downloads the playlist's game set (`00101/game_set_015.bin`), which is not
-generated yet, so the lobby says "This playlist is currently unavailable".
+`DATA_DIR/playlists.json` replaces the built-in playlist list (`DEFAULT_PLAYLISTS` in the
+generator: one "Free For All" playlist, 2-8 players, the uploaded game type "Slayer" on
+Sword Base, Zealot and Powerhouse). Clients pick up new files when they restart.
+
+**Status (two instances on one machine, one server).**
+
+- Works: the lobby lists the server's playlists and descriptions and shows "Ready"; START
+  MATCHMAKING shows "Searching… Looking for player"; each instance hosts a matchmaking
+  session, publishes it on the server and finds the other's through
+  XSessionSearchWeighted; QoS lookups answer with the host's data; the newer group joins
+  the older group's session (both see two members, the game traffic flows).
+- Not yet: the merged group never starts a match. The host enters the arbitration state
+  and waits for every member to acknowledge the latest session update and report status
+  bit 5 (`sub_8229C7F8(session, 2, 5)` in `sub_82287DE8`); the member's acknowledged
+  update number stays one behind the host's (host 4, member 3), its status bits stay 0,
+  and its lifecycle stays in assemble-match (12) because it never sees the host's
+  progress byte change. After 30 s (network configuration +0x4CC) the host fails with
+  reason 0x11, both recycle (state 8) and search again. Why the member does not apply
+  the last update is open; the friend-join path (custom games) replicates sessions fine.
 
 #### Download and validation
 
@@ -530,7 +548,7 @@ No client change was needed: the manifest itself is not signed (mode 0).
 | --- | --- | --- |
 | `manifest_001.bin` | `onfm` v1 | u32 count, then {char path[0x50] relative to `default_hoppers` with a leading `/`, lowercase; salted SHA-1} per file |
 | `en/rsa_manifest.bin` (object +0, required) | `mapm` v1, 0x8004 bytes | u32 count, 128 RSA signatures of 0x100 bytes. When a map loads (`sub_826E93C8` → `sub_822DBE78`) its header signature (file offset 0x36C) must be listed, or the console is flagged as running modified content (byte 0x8330E589). The generator lists the operator's maps |
-| `network_configuration_241.bin` (optional) | `netc` v241, 0x2254 bytes raw | Network tuning, applied to 0x82BD28A8 (`sub_82299860`). Optional: the game keeps its built-in defaults when it is missing. +0x1B02 (0x82BD43AA) non-zero disables the Arena season check below |
+| `network_configuration_241.bin` (required) | `netc` v241, 0x2254 bytes raw | Network tuning, applied to 0x82BD28A8 (`sub_82299860`). The game fills the same block with built-in defaults at start; while the file is missing (object at 0x83347D04 in state 3) `sub_8228FB68` reports the server unavailable, so the server serves the client's defaults back. Includes the search intervals (+0x52C, +0x530), the arbitration timeouts (+0x4C8, +0x4CC), a 100 ms cap on ping limits (+0x538), the map id table (+0x18F4, 64 × {id, flags}) and the Arena-disable byte (+0x1B02) |
 | `dlc_map_manifest.bin` (required) | `dlcd` v1, 0xF504 bytes raw | DLC maps; all zero = none |
 | `en/matchmaking_banhammer_messages.bin` | `bhms` v1 | optional, not generated |
 | `matchmaking_hopper_027.bin` (required) | `mhcf` v27 | the hopper table, below |
@@ -547,22 +565,50 @@ big-endian uncompressed size and a zlib stream (`sub_822D8E38`, `sub_824E7FC8` �
 
 **Hopper table** (0x8F48 bytes, at 0x83382E80 in the object at 0x83378FB8): +0 u32 hopper
 count, +4 u32 category count, 16 categories of 0x44 bytes at +8 ({u16 id, char name[32],
-u16 image, …}), 32 hoppers of 0x458 bytes at +0x448. Hopper fields known so far: +0 char
-name[32] (shown in the lobby), +0x20 salted SHA-1 of its game set, +0x34 u16 id, +0x36 u16
-category, +0x38 byte, +0x3C u32, +0x44 byte (selection group), +0x48 / +0x50 u64 start /
-end time (0 = always), +0x70 / +0x74 i32 min / max party size, +0x80, +0x84 i32, +0x88 –
-+0x8C, +0x93, +0x94, +0xB4 – +0xB8, +0xC5 bytes, +0x98 /
-+0xA0 / +0xA4 / +0xA8 / +0xAC i32 team layout limits checked against the game set
-(`sub_82291260`), +0x114 float, +0x384 byte variant source (0 = download game and map
-variant, 1/2 = game variant only). `sub_82290028` returns the reason a party cannot start a
-hopper (0x32 not started, 0x33 expired, 0x22 / 0x21 party too small / large, 0x25, 0x34,
-0x26 – 0x2F per-player requirements).
+u16 image, …}), 32 hoppers of 0x458 bytes at +0x448. Hopper fields:
+
+| Offset | Meaning |
+| --- | --- |
+| +0x00 | char name[32], shown in the lobby |
+| +0x20 | salted SHA-1 of the hopper's game set |
+| +0x34 / +0x36 | u16 id / u16 category |
+| +0x44 | byte, selection group |
+| +0x48 / +0x50 | u64 start / end time, 0 = always (errors 0x32 / 0x33) |
+| +0x58 / +0x5C, +0x60 / +0x64, +0x68 / +0x6C | i32 player requirement ranges (games played, experience, rank; a 0 maximum = none) checked per player by `sub_82290EA8` |
+| +0x70 / +0x74 | i32 min / max party size (errors 0x22 / 0x21) |
+| +0x78 / +0x7C | i32 range of another player value (errors 0x24 / 0x23) |
+| +0x80 | i32 required access bit, −1 = none |
+| +0x84 | i32 account type: 0 / 1 / 2 = any |
+| +0x88 – +0x8C | bytes: requirement applies to every party member rather than one |
+| +0x93, +0x94, +0xB6, +0xB8 | bytes: further start checks (0x35, 0x25, 0x2D, 0x34) |
+| +0x98, +0xA0, +0xA4, +0xA8, +0xAC | i32 voting: options per vote (1–3), rounds (1–8), … (`sub_82291260`) |
+| +0x130 | i32 seconds before the search widens to its next stage |
+| +0x134 | four search stages of 0x94 bytes (`sub_822D0760`): per stage skill / range limits (+0x04 byte + i32, +0x0C byte + float, +0x14 byte + 3 floats, +0x24 / +0x25 bytes) and the ping limit, base + step × increment (+0x28, +0x2C; `sub_822D0D68`). A limit of 0 ms rejects every session found (`sub_822CD310`) |
+| +0x384 | byte, variant source: 0 game and map variant files, 1 or 2 game variant only, 3 none (keeps the session's previous variant; the first game of a session reads a null pointer in `sub_8227FAA0`) |
+| +0x385 | byte, no teams |
+| +0x388 / +0x38C | i32 min / max players without teams (`sub_82286418`, `sub_8227C040`); with a minimum of 1 a lone player's match starts at once |
+| +0x394, +0x39C… | teams: minimum team count and 8 team blocks of 0x10 bytes (sizes) |
+
+`sub_82290028` returns why a party cannot start a hopper (0x32 not started, 0x33 expired,
+0x22 / 0x21 party too small / large, 0x25, 0x34, 0x26 – 0x2F per-player requirements, or
+the value of `sub_8228FB68`: title files missing or failed, the Arena check, the game set
+still downloading (7 = game set failed)).
 
 **Game set** (0xD404 bytes): u32 count, then entries of 0xD4 bytes: +0 i32 weight (0 =
-off), +0x2C flags, +0x2E i16 (0–255), +0x30 i32 (0–31), +0x44 i32 map id, +0x48 game
-variant {+0 u8 present, +0x11 char name[32], +0x31 salted SHA-1}, +0x8D map variant (same
-layout). The variants are `%05u/%s_054.bin` (`gvar` v54, a bitstream decoded by
-`sub_824CD9E8`) and `%05u/map_variants/%s_031.bin` (`mvar` v31).
+off), +4 / +8 i32 min / max players, +0x14 i32 (at most 1), +0x18 i32 (at least 50),
++0x2C flags (bit 0 clear: +0x34–+0x3F must be zero), +0x2E i16 (0–255), +0x30 i32 (0–31),
++0x44 i32 map id (must be in the network configuration's map table), +0x48 game variant
+{+0 u8 used, +0x11 char name[32], +0x31 salted SHA-1}, +0x8D map variant (same layout);
+"used" must match the hopper's variant source (`sub_82291260`, `sub_822916A0`). The
+variants are `%05u/%s_054.bin` and `%05u/map_variants/%s_031.bin`.
+
+**Game variants** (`gvar` v54) hold the same bitstream (decoded by `sub_824CD9E8`) as the
+`mpvr` v54 chunk of a game type the player saves: `mpvr` is {salted SHA-1 of the size
+and the bitstream, 4 bytes, u32 size, the bitstream (at most 0x5000 bytes)}
+(`sub_824CDDD8`), so the generator takes the file uploaded to the File Share (its `_cmp`
+chunk zlib-expanded) and serves the bitstream as `gvar`. Map variants (`mvar` v31) are served as the saved chunk. Map ids:
+Sword Base 1000, Zealot 1020, Boardwalk 1035, Powerhouse 1040, Countdown 1055, Spire 1080,
+Reflection 1150, Boneyard 1200, Forge World 3006.
 
 #### "The Halo: Reach server is unavailable"
 
@@ -573,3 +619,37 @@ The lobby state (`sub_8227D688`) is "available" when the hopper table is loaded 
 answers it with `arhs` v3: {i32 season (replies below 1 are dropped), i32, u64, u8, u8, u32
 count (≤ 32), then 30-byte ratings starting with an XUID}; season 1 with no ratings is
 enough.
+
+#### Searching and joining
+
+Matchmaking runs on the network life cycle at 0x8322AD50 (+0 current state, +8 the state
+objects; each has a vtable {update, check, enter, exit, name}). States seen: 1 pre-game
+(lobby), 7 matchmaking-start, 8 matchmaking-recycle, 11 find-and-assemble-match, 12
+assemble-match, 13 arbitration, 14 select-host, 15 prepare-map, 16 in-match, 17–19 end of
+match. While searching, each party leader hosts a "group" session (XSessionCreate flags
+0x2D: host, stats, matchmaking, peer network; 0x27 is the party's presence session) and
+every 10 s runs the "session-search-weighted" task (task object `*0x83150E24`, results at
++0x18): XSessionSearchWeighted (0xB0065) {procedure, user, max results, weighted
+property / context counts (u16 each) and pointers, property / context counts (u16
+each), properties, contexts, results size, results}. Reach searches with 7 properties
+(0x10000015 = the hopper id, 0x10000047/48, 0x1000003A, 0x10000050, 0x1000004D,
+0x1000003B) and contexts 0x800A / 0x800B; it sets 0x10000015 on its own user only for the
+search.
+
+`live_xmsg.cpp` (section "Matchmaking") publishes the newest session we host with
+XSESSION_CREATE_USES_MATCHMAKING to the server with its playlist (the hopper id we last
+searched for), slots, our user properties and contexts (XUserSetProperty 0xB0007 /
+XUserSetContext 0xB0006 are recorded) and its QoS data (XNetQosListen). A search sends
+the playlist to the server and waits up to 0.5 s for the answer, then fills the results
+(0x5C-byte XSESSION_SEARCHRESULTs with the properties and contexts after them). The
+server (`reach_live_server.py`, messages 15–17) returns the room's sessions for that
+playlist; a searcher that hosts a session itself only gets older ones, otherwise two
+groups that find each other join each other and both wait forever.
+
+The game copies the results (`sub_8226CE50`: at most 4 properties, 2 contexts, property
+ids from the table at 0x82A44718, index 2 being a string), skips its own XNADDR, makes a
+candidate per result (`sub_8231CD68`; candidates at `*0x83559218`, 0x1308 bytes, status
+byte at +0x58), probes it with XNetQosLookup (RTT and bandwidth land at candidate
++0x6C…+0x80) and joins a candidate whose median RTT is within the stage's ping limit
+(`sub_822CD310`), through the same deferred join record (0x832FAD50) a friend join uses.
+

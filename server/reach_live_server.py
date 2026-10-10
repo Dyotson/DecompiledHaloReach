@@ -268,7 +268,9 @@ class ReachLive(asyncio.DatagramProtocol):
     # A player hosting a matchmaking session publishes it with a search key (the
     # playlist); players searching with that key get the room's matching sessions. The
     # session record is the client's (XSESSION_INFO, slots, properties, QoS data) and
-    # opaque here.
+    # opaque here. Every searching group also hosts a session, and two groups that find
+    # each other both join the other and wait for it forever, so a searcher with a
+    # session of its own only sees older sessions: newer groups join older ones.
 
     def on_match(self, peer, kind, body):
         if kind == MATCH_PUBLISH:
@@ -277,14 +279,19 @@ class ReachLive(asyncio.DatagramProtocol):
                 peer.match = None
             else:
                 (key,) = struct.unpack_from(">I", body, 1)
-                peer.match = (key, body[5:5 + MAX_MATCH_RECORD], time.monotonic())
+                record = body[5:5 + MAX_MATCH_RECORD]
+                old = getattr(peer, "match", None)
+                since = old[2] if old and old[1][:8] == record[:8] else time.monotonic()
+                peer.match = (key, record, since)  # since: when this session first appeared
             return
         # search key u32, request number u32. Reply: request number u32, count u16, then
-        # per session the host's id u32, XUID u64 and record (u16 length + bytes), newest
+        # per session the host's id u32, XUID u64 and record (u16 length + bytes), oldest
         # first, as many as fit a datagram.
         key, request = struct.unpack_from(">II", body, 0)
-        found = [p for p in self.room_peers(peer) if getattr(p, "match", None) and p.match[0] == key]
-        found.sort(key=lambda p: p.match[2], reverse=True)
+        own = getattr(peer, "match", None)
+        found = [p for p in self.room_peers(peer) if getattr(p, "match", None) and p.match[0] == key
+                 and not (own and own[0] == key and p.match[2] >= own[2])]
+        found.sort(key=lambda p: p.match[2])
         entries, size = [], 6
         for p in found:
             entry = struct.pack(">IQH", p.id, p.xuid, len(p.match[1])) + p.match[1]

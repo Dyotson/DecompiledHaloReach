@@ -154,6 +154,23 @@ class ServerTest(unittest.TestCase):
         b.send(MATCH_SEARCH, struct.pack(">II", 101, 9))
         self.assertEqual(struct.unpack_from(">IH", b.recv()[1]), (9, 0))
 
+    def test_newer_matchmaking_session_joins_the_older(self):
+        a = Client(self.addr, b"Kat", 0x0009000000000051, room=b"r5")
+        b = Client(self.addr, b"Jorge", 0x0009000000000052, room=b"r5")
+        a_id, _ = a.hello(), b.hello()
+        a.send(MATCH_PUBLISH, struct.pack(">BI", 1, 101) + b"A" * 8)
+        time.sleep(0.1)
+        b.send(MATCH_PUBLISH, struct.pack(">BI", 1, 101) + b"B" * 8)
+        time.sleep(0.1)
+        a.send(MATCH_PUBLISH, struct.pack(">BI", 1, 101) + b"A" * 8 + b"more")  # same session
+        time.sleep(0.1)
+        a.send(MATCH_SEARCH, struct.pack(">II", 101, 1))
+        self.assertEqual(struct.unpack_from(">IH", a.recv()[1]), (1, 0))  # nothing older
+        b.send(MATCH_SEARCH, struct.pack(">II", 101, 2))
+        body = b.recv()[1]
+        self.assertEqual(struct.unpack_from(">IH", body), (2, 1))
+        self.assertEqual(struct.unpack_from(">I", body, 6)[0], a_id)
+
     def test_unregistered_sender_is_told(self):
         d = Client(self.addr, b"Delta", 0x0009000000000004)
         d.send(RELAY, struct.pack(">IHH", 1, 1000, 1000) + b"x")
