@@ -267,6 +267,19 @@ Check exact param names in `endpoints.json` before calling.
   - The game rejects an option given twice (CLI11), so wrappers must not add `--log_file` when
     the caller passes one.
 
+- 2026-10-10: **No more tearing; frame-time statistics.** A shimmer crawling down the menus
+  was tearing: the SDK presents with IMMEDIATE, KWin lets fullscreen games tear, and the
+  tear line of a 30 fps image on a 144 Hz display lands at a new height every frame. Guest
+  frames dumped three times a second on the title and main menus have no moving band. The
+  game now defaults the SDK's present-mode settings to FIFO (`src/main.cpp`); MAILBOX was not
+  chosen because the SDK's UI thread repaints nonstop on Linux (thousands of presents a
+  second without a vsync wait, each rebuilding a pipeline). On a quiet machine FIFO takes the
+  GPU from 44% to 21% busy on the main menu and from 55% to 32% in a SWAT game, the game's CPU
+  use from 2.4 to 1.8 cores (menu), and the game holds 30.0 fps either way. `RECOMP_PERF=1`
+  (`src/debug/frame_stats.cpp`, replacing `REACH_FPSLOG`) logs fps, percentiles, 1% lows,
+  stutters and new pipelines for guest frames and host presents; `tools/bench.sh` measures
+  the main menu or a Custom Game, warm or cold (`docs/perf.md`).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips
@@ -307,6 +320,9 @@ Check exact param names in `endpoints.json` before calling.
   run it without that variable.
 - Each instance takes about 6 GB of RAM and 5 GB of `/dev/shm`. `REACH_NETTRACE=1` logs every
   network call; prefer `REACH_NETTRACE=packets` for long runs (logs go to RAM-backed `/tmp`).
+- Frame rate and stutter: `tools/bench.sh menu|gameplay [--cold]`, or `RECOMP_PERF=1` in any
+  run (`docs/perf.md`). Measure only with no other game running (it prints `CONTENDED`
+  otherwise).
 - Frame dumps without screenshots: `REACH_FRAMEDUMP=20,28` + `--vulkan_readback_resolve=true`, then
   `tools/frame_to_png.py`. Texture binding trace: `REACH_TEXTRACE=1`. Live guest memory: `tools/guestmem.py`.
   `--gpu_allow_invalid_fetch_constants=true` silences thousands of fetch-constant warnings.

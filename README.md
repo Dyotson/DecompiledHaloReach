@@ -137,6 +137,8 @@ tools/play.sh --resolution_scale=2   # render at 2304x1440 instead of 1152x720
   gamertag = "Noble Six"
   ```
 
+- **Vsync** is on (no tearing); `vulkan_allow_present_mode_immediate = true` in `reach.toml`
+  turns it off, `vulkan_allow_present_mode_mailbox = true` picks mailbox ([`docs/perf.md`](docs/perf.md)).
 - **Saves** (profile, Credits, Armory, maps, films) are in `~/.local/share/reach/`; the log
   is `~/.local/share/reach/reach.log`.
 - Skip the intro video with Esc (Start); in menus Enter is A and Backspace is B.
@@ -210,6 +212,9 @@ docker run -d -p 21100:21100/udp -p 21101:21101 -v reach-live-data:/data reach-l
 
 - `tools/run_reach.sh SECONDS` runs a time-limited test that skips the intro (logs in
   `/tmp/reach_run.log`).
+- `tools/bench.sh menu|gameplay [--cold]` measures frame rate and stutter on the main menu or
+  in a Custom Game (`RECOMP_PERF=1` logs the same statistics in any run;
+  [`docs/perf.md`](docs/perf.md)).
 - `tools/live_session.sh DIR` / `tools/live_step.sh DIR WAIT INPUT...` drive a game from a
   script (input FIFO, frame dumps); `tools/live_shot.sh DIR` saves what the window shows.
 - `tools/system_link_pair.sh DIR_A DIR_B` starts two games on one machine in a System Link

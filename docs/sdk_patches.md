@@ -147,6 +147,13 @@ only adjust it):
   host semaphore keyed by the critical section's address; the guest-visible fields keep their
   meaning. Firefight then ran 10+ minutes several times without freezing.
   `REACH_SDK_CRITICAL_SECTIONS=1` restores the SDK's version.
+- **Presentation** (`src/main.cpp`, `src/platform/vulkan_hooks.cpp`): the game sets the
+  SDK's `vulkan_allow_present_mode_*` defaults to FIFO only (the SDK's IMMEDIATE tears) and
+  wraps calls in the Vulkan device's function table to log swapchain present modes and time
+  presents. Not fixed: the presenter rebuilds its output pipeline on every paint (it never
+  stores `swapchain_format`) and, on Linux, repaints nonstop while any ImGui dialog exists
+  (the achievement notification always does). Both are in `librexruntime.so`;
+  [`docs/perf.md`](perf.md) has the details.
 - `XamEnumerate` completion codes (`xam_enumerate.cpp`), headless `XamShowKeyboardUI`
   (`xam_keyboard.cpp`), files marked delete-on-close (`file_delete_on_close.cpp`), file size
   after writes (`file_size_refresh.cpp`), Winsock TCP (`live_tcp.cpp`) and the Xbox LIVE
