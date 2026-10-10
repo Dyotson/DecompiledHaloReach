@@ -283,6 +283,38 @@ Check exact param names in `endpoints.json` before calling.
   now registered only while a toast shows (`src/platform/achievement_toast.cpp`), and the
   window is repainted once per guest frame in every present mode.
 
+- 2026-10-10: **Firefight freezes while loading a mission: half fixed, still open.**
+  - Report: Firefight froze after picking Courtyard (the ONI Sword Base map, hence "Sword
+    Base") following an Overlook game. The log's last lines, failed opens of
+    `cache1:\autosave\cache1:\autosave\asq_ff10_pr_BBBBBBBB.film`, are a red herring: every
+    game start after a game in the same session opens the previous film with that doubled
+    path, in working runs too.
+  - Reproduces with the user's profile copied to a separate `XDG_DATA_HOME`: Overlook game,
+    END GAME, back to the lobby, pick Courtyard and press START GAME while the lobby still
+    says "Readying map" (about 1 in 2 tries).
+  - Cause found: loading a mission runs Reach's XEnumerate on a content aggregate
+    enumerator thousands of times (about 2,000 a second for a moment, then ~15 a second).
+    Each call is a XamTaskSchedule thread ending with `ObDereferenceObject(enumerator)`.
+    X_KENUMERATOR has no dispatcher header, so its fields overwrite the handle the runtime
+    stashes at +8/+12; the runtime then binds a bogus event there, frees it, and every later
+    dereference releases whatever object reuses that handle (`REACH_SDK_OBJECT_REFS=1
+    REACH_OBJTRACE=1` logs 4,000+ such releases of thread objects per load). Threads freed
+    while running fault forever in `XThread::Exit` or their start lambda (gdb: 47 such threads,
+    main thread spinning in `sub_820D4270`); threads never freed exhaust the guest heap
+    ("XAM task creation failed: C0000017", then `memset` of a null XamAlloc result in
+    `sub_828055B8` faults forever on the main thread). The old critical-section freeze (a
+    handle also stashed in "a heap object at 0x30655018") has the same shape: enumerator
+    objects sit at 0x3xxx5018.
+  - `src/kernel/object_refs.cpp` fixes the dereference (finds the enumerator, never releases
+    an object that does not own the pointer) and frees XAM task threads when they end. With it
+    the thread use-after-free is gone, but the second Courtyard load still froze: the guest
+    heap ran out (`BaseHeap::Alloc failed`, then the same null `memset`). Next: find what
+    leaks per enumeration (the XamAlloc'd task block from `sub_828055B8`, freed only on
+    failure?, or task thread stacks/TLS) and why the load enumerates thousands of times
+    (probably a completion code the game treats as "retry", like the `XamEnumerate` fix).
+    Hang diagnosis: `gdb -p PID -batch -ex 'thread apply all bt 25'`; threads faulting in
+    `XThread::Exit` mean a freed thread object.
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

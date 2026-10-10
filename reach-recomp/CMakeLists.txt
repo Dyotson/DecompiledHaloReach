@@ -55,6 +55,7 @@ set(REACH_SOURCES
     src/kernel/critical_section.cpp
     src/kernel/file_delete_on_close.cpp
     src/kernel/file_size_refresh.cpp
+    src/kernel/object_refs.cpp
     src/kernel/identity.cpp
     src/kernel/input_autopress.cpp
     src/kernel/live_xmsg.cpp
