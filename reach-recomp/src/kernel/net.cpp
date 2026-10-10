@@ -1109,12 +1109,33 @@ REACH_NET_FUNC(NetDll_XNetConnect, NetOn(), ctx.r3.u64 = 0)
 REACH_NET_FUNC(NetDll_XNetGetConnectStatus, NetOn(), ctx.r3.u64 = 2)
 // XNetQosListen / XNetQosLookup: src/kernel/live_xmsg.cpp.
 
+namespace {
+// A console's machine id. With an identity (Reach Live) it comes from the player's XUID,
+// as XNetLogonGetMachineID does (live_xmsg.cpp), so it stays the same across runs and
+// server restarts; the game sends it to the title servers. Otherwise it comes from the
+// XNADDR (host port and address).
+uint64_t MachineIdOf(const uint8_t* xna) {
+  const uint32_t ina = Load32(xna);
+  uint64_t xuid = 0;
+  uint8_t self[36];
+  VNet::Get().WriteSelfXnAddr(self);
+  if (std::memcmp(self, xna, 16) == 0) {
+    xuid = reach::IdentityXuid();
+  } else if ((ina & 0xFF000000) == kLiveInaTag) {
+    for (const auto& f : VNet::Get().Roster()) {
+      if (f.id == (ina & 0x00FFFFFF)) xuid = f.xuid;
+    }
+  }
+  if (xuid) return 0xFA00000000000000ull | (xuid & 0xFFFFFFFFull);
+  return uint64_t(0xFA000000u | Load16(xna + 8)) << 32 | ina;
+}
+}  // namespace
+
 // INT XNetXnAddrToMachineId(const XNADDR* pxnaddr, ULONGLONG* pqwMachineId)
 REACH_NET_FUNC(NetDll_XNetXnAddrToMachineId, NetOn(), {
-  const uint8_t* xna = base + ctx.r4.u32;
-  uint8_t* id = base + ctx.r5.u32;
-  Store32(id, 0xFA000000 | Load16(xna + 8));
-  Store32(id + 4, Load32(xna));
+  const uint64_t id = MachineIdOf(base + ctx.r4.u32);
+  Store32(base + ctx.r5.u32, uint32_t(id >> 32));
+  Store32(base + ctx.r5.u32 + 4, uint32_t(id));
   ctx.r3.u64 = 0;
 })
 

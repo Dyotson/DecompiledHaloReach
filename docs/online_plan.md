@@ -402,8 +402,9 @@ from `query.ashx`. Joining a roster player goes through the deferred join
 
 Not done: hopper files (matchmaking playlists, game and map variants, all signed), file
 share (`FilesGetCatalog.ashx`, `FilesUpload.ashx`, … and user storage), Arena, the
-Bungie presence record layout, and a stable machine id (the `machineId` the game sends is
-derived from the XNADDR, which changes with the server's epoch).
+Bungie presence record layout. (The `machineId` the game sends comes from
+`XNetXnAddrToMachineId`; it is now 0xFA000000 plus the low half of the player's XUID, stable
+across runs and server restarts, like `XNetLogonGetMachineID`.)
 
 ### 5.2 Xbox LIVE: friends, presence, sessions
 
