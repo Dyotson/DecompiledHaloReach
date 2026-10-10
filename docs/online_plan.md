@@ -508,8 +508,13 @@ python3 server/reach_live_hoppers.py DATA_DIR --maps extracted/xbox360/maps
 
 `DATA_DIR/playlists.json` replaces the built-in playlist list (`DEFAULT_PLAYLISTS` in the
 generator: "Free For All", 2-8 players, the game type "Slayer" on Sword Base, Zealot and
-Powerhouse; "Team Slayer", two teams of 1-4, the game type "Team Slayer" on Sword Base,
-Boardwalk and Countdown). Each game names a game type (the newest upload of that name) and
+Powerhouse; "Team Slayer", two teams of 1-4, the game type "Classic Slayer" on Sword Base,
+Boardwalk and Countdown; "Capture the Flag", two teams of 1-4, "Capture the Flag" on Sword
+Base, Countdown and Boardwalk; "Objective", 2-8 players, "Oddball" on Zealot and Sword Base
+and "King of the Hill" on Sword Base and Powerhouse). The game type names are the names the
+game gives a saved copy of the built-in type (Classic Slayer is a team type; Slayer,
+Oddball and King of the Hill saved with Teams off). Without a keyboard the save keeps that
+name, and of two uploads with the same name the newest wins. Each game names a game type (the newest upload of that name) and
 a map (by its name in `maps/info`); the map variant is the map's default one, which the
 generator builds, unless `"map_variant"` names a Forge map uploaded to the File Share.
 Games whose files are missing are left out with a warning, and playlists without games.
@@ -520,8 +525,22 @@ MATCHMAKING; within about 15-60 s they find each other, merge, pass arbitration 
 selection, load the map ("Starting match… Brace for carnage") and play together: Slayer
 on Sword Base, Zealot and Powerhouse, and Team Slayer 1v1 (Red Team Carter, Blue Team Jun).
 After a match both save stats, leave the group, search again and are matched into the next
-game together; three games in a row were tested with a 1-minute game type. Not checked:
-more than two players, other game types, Arena.
+game together; three games in a row were tested with a 1-minute game type. Other game
+types work the same way (2026-10-10, 1-minute versions saved and uploaded as above): six
+Capture the Flag games in a row on Countdown (two teams of one), and an "Objective" FFA
+playlist that picked Oddball on Zealot and then King of the Hill on Sword Base.
+
+Open:
+- More than two players (needs a third instance, about 26 GB free on this machine).
+- Arena (only the season reply exists).
+- The Playlist screen draws no names: the list has its entries (DOWN moves through them, the
+  details panel changes) but no text, so in tests the playlist was chosen by restarting
+  with a `playlists.json` whose first playlist is the one wanted (the lobby falls back to it
+  when the remembered one is gone). The lobby itself shows the selected playlist's name
+  (`hopper_name`, 0x826ECD20). Not investigated further.
+- Once, after leaving the Matchmaking lobby (with a second instance in the same party),
+  opening Custom Game made the game fault in a loop (null read on one thread). Leaving the
+  lobby and opening Custom Game alone did not reproduce it.
 
 After every match the game itself dissolves the group: the matchmaking-recycle state
 (`sub_82283548`) leaves the group session and each party searches again, keeping its own
@@ -708,3 +727,34 @@ game through `sub_82280140`. The matchmaking progress parameter the members foll
 by `sub_822A2FD0`: 0xB searching, 0xC–0xF assembly and arbitration, 0x10 countdown, 0x11
 set by `sub_8228C200` when the game cannot start or has ended, then 0x12 and 0x13.
 
+
+#### Progression from matchmade games
+
+Matchmade games pay out as on LIVE with no extra code (details and the reverse engineering
+in `docs/progression_re.md` section 3.1). At the end of a game each player's console awards
+the game-completion Credits from the `gcrg` tag: in matchmaking 28 cR per minute (up to 20
+minutes), ×1.2 for the winner or ×1.1 for the top half, against 5 cR per minute in custom
+games once the profile has synced with a server. It saves the profile and runs a rewards
+sync with the server at once, so the server's record (`DATA_DIR/players/<xuid>.json`) and
+the profile agree after every game, and either one restores the other: a restarted game
+loads the same total, and a reinstalled one gets the server's.
+
+Kills in a matchmade game count for the daily and weekly challenges and for commendations
+the same way as elsewhere: the incident system (`Function_821DBB88`) has per-reaction
+flags for "only in matchmaking" and "only outside it". Commendation progress is part of the
+rewards block (block A +0x008), so the server keeps it with the Credits.
+
+Tested with Carter (host) and Jun in 1-minute Team Slayer games: four 0-0 games paid +30 cR
+each to both (5578 → 5698, 5645 → 5765), both totals survived a restart of both games, and
+a 2-0 game in which Carter killed Jun twice paid Carter 11 cR per kill (two commendations)
+plus 33 for the win (5698 → 5753) and Jun 28 (5765 → 5793); Carter's "kill 50 enemies"
+daily went to 2/50 and the server stored the challenge progress and four commendation
+counters. Capture the Flag, Oddball and King of the Hill games paid the same +30 per 0-0
+game; at the end of the round Carter had 5993 cR and Jun 6033, and the challenge progress
+and commendation counters were still there after each restart.
+
+Not handled: the hopper's own Credits options. The game results globals (0x8373FE80) carry
+a matchmaking kind (+0x70, selecting the `gcrg` entry), a bonus (+0x78, paid when the game
+lasted +0x7C minutes) and multipliers (+0xAC bit 0, +0xB4…+0xBC); they come from the
+hopper or game set (where is not known yet) and are zero in our files, which gives the
+standard rates.

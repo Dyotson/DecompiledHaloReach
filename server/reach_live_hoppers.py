@@ -266,13 +266,27 @@ DEFAULT_PLAYLISTS = {
                    {"game_variant": "Slayer", "map": "Powerhouse"}]},
         {"id": 102, "category": 1, "name": "Team Slayer",
          "description": "Two teams, kills win.", "max_party": 4, "teams": 2, "team_size": [1, 4],
-         "games": [{"game_variant": "Team Slayer", "map": "Sword Base"},
-                   {"game_variant": "Team Slayer", "map": "Boardwalk"},
-                   {"game_variant": "Team Slayer", "map": "Countdown"}]},
+         "games": [{"game_variant": "Classic Slayer", "map": "Sword Base"},
+                   {"game_variant": "Classic Slayer", "map": "Boardwalk"},
+                   {"game_variant": "Classic Slayer", "map": "Countdown"}]},
+        {"id": 103, "category": 1, "name": "Capture the Flag",
+         "description": "Take their flag, bring it home.", "max_party": 4, "teams": 2,
+         "team_size": [1, 4],
+         "games": [{"game_variant": "Capture the Flag", "map": "Sword Base"},
+                   {"game_variant": "Capture the Flag", "map": "Countdown"},
+                   {"game_variant": "Capture the Flag", "map": "Boardwalk"}]},
+        {"id": 104, "category": 1, "name": "Objective",
+         "description": "Hold the skull, hold the hill.", "max_party": 8, "max_players": 8,
+         "games": [{"game_variant": "Oddball", "map": "Zealot"},
+                   {"game_variant": "Oddball", "map": "Sword Base"},
+                   {"game_variant": "King of the Hill", "map": "Sword Base"},
+                   {"game_variant": "King of the Hill", "map": "Powerhouse"}]},
     ],
 }
 # A game's map variant is the map's default one unless "map_variant" names a map saved in
-# Forge and uploaded to the File Share. Games whose files are missing are left out.
+# Forge and uploaded to the File Share. Games whose files are missing are left out. The game
+# type names are those the game gives a saved copy of a built-in type (Classic Slayer is a
+# team type; Slayer, Oddball and King of the Hill saved with Teams off).
 
 
 def shared_variants(data_dir):

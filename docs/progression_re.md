@@ -40,9 +40,9 @@ All functions below are renamed in the Ghidra project. Several were missing from
 | +0x000 | u8 | slot valid **[C]** |
 | +0x001 | u8 | sync state: 0 = not loaded, 1 = loaded from profile / offline, 2 = synced with LSP **[C]** |
 | +0x008 | block A, 0x208 | **current totals** (layout below) **[C]** |
-| +0x210 | block B, 0x208 | delta earned while synced (online), since last upload **[C]** |
-| +0x418 | block C, 0x108 | delta earned offline: {i32 cookies, i32 count, u8 itemflags[256]} **[C]** |
-| +0x520 | i32 | unknown; persisted **[C]** |
+| +0x210 | block B, 0x208 | earned today while synced (online) **[C]** |
+| +0x418 | block C, 0x108 | earned today while not synced (offline): {i32 cookies, i32 count, u8 itemflags[256]} **[C]** |
+| +0x520 | i32 | day number of blocks B and C; persisted. 0x8258FA68 (every rewards tick) clears B and C when the day changes, so the caps below are daily **[C]** |
 | +0x524 | i32 + u16[256] | purchase log: count, then Armory entry indices **[C]** |
 | +0x728 | u64 | last-modified time **[C]** |
 | +0x734 | u32 | flags. bit0 = has synced with server (enables caps). bit1 = profile block valid / hashes present **[C]**, naming **[I]** |
@@ -55,7 +55,7 @@ All functions below are renamed in the Ghidra project. Several were missing from
 **Block A/B layout (0x208)** [C]:
 - +0x000 i32 `cookies`. In A this is the lifetime total earned, which drives rank.
 - +0x004 i32 `award count`.
-- +0x008 a table of 32 entries × {i16 ×4}. These are per-source counters, saturated at 0x7FFF. Their meaning is **[I]**.
+- +0x008 i16[128], saturated at 0x7FFF: **commendation progress**, one counter per `comg` entry **[C]** (read by 0x820B9230 as state +0x10 + index × 2, raised by `Commendation_IncrementProgress` 0x82590AA0; section 3.1).
 - +0x108 u8 `itemflags[256]`, indexed by `cpgd` entry.
   - bit0 = purchased/owned.
   - bit1 = visible/forced.
@@ -265,6 +265,90 @@ Award kinds [C]:
 - The mapping of `cat`/`sub` to campaign, firefight, MP or custom is **[I]**. `gcrg` data shows 28 cR/min capped at 75 min (top 0), 28/min to 20 min (top 1, top 2), and custom games at 5/min to 10 min.
 - The carnage-report UI reads these through game statistic "cookies" (table 0x82A39E00) **[I]**.
 
+### 3.1 Matchmade games (verified 2026-10-10)
+
+**Which `gcrg` entry pays** [C] (`GameResults_AwardGameCompletionCookies` 0x824C6350, disassembly).
+The game results globals at 0x8373FE80 hold, for the game that just ended:
+
+| Off | Content (seen in a matchmade Team Slayer game) |
+|---|---|
+| +0x18 | u8 matchmaking game (1) |
+| +0x1C | u32 hopper id (0x65 = 101); +0x20 the hopper name, UTF-16 |
+| +0x70 | u8 multiplayer matchmaking kind: 0 → `gcrg` sub 0, 1 → sub 2, 2 → sub 1 (0 here) |
+| +0x78 / +0x7C | i32 bonus cR, awarded as kind 8 when the game lasted at least +0x7C minutes (0 / 0) |
+| +0xAC bit 0, +0xB4 / +0xB8 / +0xBC | f32 multipliers of the entry's rate / winner / performance factors (off) |
+| +0xD0 | u8 team game: placing is by team |
+| +0xD4 | u32 game mode: 1 campaign, 2 Firefight, 3 multiplayer |
+| +0xDC | u32 `gcrg` sub for campaign and Firefight |
+
+The (cat, sub) passed to `Rewards_ComputeGameCompletionAward`:
+
+| Game | Matchmaking (+0x18 set) | Otherwise |
+|---|---|---|
+| Campaign (mode 1) | 0, +0xDC | 2, 3 |
+| Firefight (mode 2) | 1, +0xDC | 2, 3 |
+| Multiplayer (mode 3) | 2, from +0x70 | 2, 3 |
+| Profile never synced in this session (state +0x1 = 0 or +0x734 bit 0 clear) | 3, 0 | 3, 0 |
+
+The `gcrg` values (read from game memory; the same in every map):
+
+| cat, sub | cR / min | up to | winner × | top half × |
+|---|---|---|---|---|
+| 0, 1-3 (campaign matchmaking) | 28 | 75 min | 1.2 | 1.0 |
+| 1, 1-3 (Firefight matchmaking) | 28 | 20 min | 1.2 | 1.0 |
+| 2, 0 and 2, 2 (multiplayer matchmaking) | 28 | 20 min | 1.2 | 1.1 |
+| 2, 1 | 27 | 20 min | 1.2 | 1.0 |
+| 2, 3 (anything else, once synced: custom games, local Firefight and campaign) | 5 | 10 min | 1.0 | 1.0 |
+| 3, 0 (never synced) | 45 | 75 min | 1.1 | 1.0 |
+
+So a profile that syncs with a Reach Live server earns 28 cR a minute in matchmaking and 5
+outside it, as on LIVE; a profile without a server earns 45 everywhere. The award is
+`28 × minutes × rank multiplier (network configuration, 1.0) × (winner 1.2 | top half 1.1 | 1)`:
+kind 5 is the base, kind 6 the rest. A 1-minute game pays 28 (loser), 30 (top half, e.g.
+both players of a tie) or 33 (winner).
+
+**What a matchmade game sends at the end** (dumped with `--dump-requests`): the game writes
+the profile (rewards block included) and starts a rewards sync right away
+(`UserUpdateRewards.ashx` with the new totals, commendation progress and `chpr`), then
+`MachineUpdateNetworkStats.ashx` and `/upload_server/stats.ashx` (both 404, not needed).
+On the Xbox LIVE side it calls XSessionWriteStats, XSessionEnd and XUserReadStats.
+
+**Commendations** [C]: progress is block A +0x008 (one i16 per `comg` entry), so it
+travels in `rpul`/`rpdl` and is kept by the server. `Commendation_IncrementProgress` only
+counts while the rewards are synced (state +0x1 == 2) and pays the per-unit cR (`comg` +0x8)
+and tier awards as kind 0.
+
+**Incident filter** [C] (`Function_821DBB88`, applied to every reaction of an incident):
+byte 0 selects game modes, byte 1 bit 0 = only outside matchmaking, bit 1 = only in
+matchmaking (game globals +0xFA60). Challenge events from reactions go through
+0x825D7EB0 → 0x824BCC80, which needs game globals +0x1E5A8 and an attached controller.
+
+**Verified with two instances** (Carter hosting, Jun; Reach Live server on the same
+machine; 1-minute Team Slayer on Countdown):
+
+| | Carter cR (awards) | Jun cR (awards) |
+|---|---|---|
+| Before | 5578 (21) | 5645 (23) |
+| 4 games, 0-0 ties | 5698 (29): +30 each | 5765 (31): +30 each |
+| Restart of both games | 5698 | 5765 |
+| 1 game, Carter kills Jun twice (2-0) | 5753 (35): +11, +11 for two kills, +33 (winner) | 5793 (32): +28 |
+| 1 game, 0-0 | 5783 | 5823 |
+| Restart; 6 Capture the Flag games, 0-0 | 5933 (47) | 5973 (44) |
+| Restart; Oddball, then King of the Hill, 0-0 | 5993 (51) | 6033 (48) |
+
+- After every game both profiles were saved at once (profile files' time = end of game) and
+  the server's records matched. After each restart every profile loaded the same total,
+  commendation counters and challenge progress, and synced (state 2).
+- The two kills raised Carter's "Blastin' and Relaxin'" daily (kill 50 enemies in any
+  mode) from 0 to 2/50 and four commendation counters (0, 7, 8, 13) to 1; each kill paid
+  11 cR in two commendation awards (kind 0). The server stored both (`chpr` progress 2, counters) and the
+  challenge progress file `challenges_<xuid>.bin` had 2.
+- The kills were forced for the test: `frag.py` (session scratchpad) finds the `players`
+  and `object` data arrays in game memory ("d@t@" headers; player datum 0x578 bytes, name
+  UTF-16 at +0xB0, unit handle at +0x28; object header 0x10 bytes with the address at +0xC;
+  object position at +0x44, forward at +0x50) and keeps Jun's biped 2 m in front of
+  Carter's on the host while Carter fires.
+
 ## 4. Daily and weekly challenges
 - **[C]** Definitions are local (`chdg`, matg+0x6A0): categories bounties (16), weekly (38), campaign (55), firefight (55), multiplayer (56). Each challenge is 0x50 bytes, with the cR reward at +0x18.
 - **[C]** The server only selects which challenges are active, via the `dcha` v3 chunk. Payload:
@@ -407,8 +491,8 @@ Commendations (`comg`, 45 entries of 0x34): for example headshot_mp has tiers 50
 
 ## 7. Unknowns and next steps
 1. How netcfg is applied: confirm that the downloaded `network_configuration_241.bin` overwrites 0x82BD28A8, find its parser, and record the 1.0 launch rank cap Bungie served.
-2. `gcrg` `cat`/`sub` selection inside 0x824C6350 (the `uStack_88` packing). Award kinds 2, 3, 4 and 7, and the callers of kind 8 and 9.
-3. Meaning of the 32×4 i16 counters in blocks A/B, of rpdl +0x208..+0x215, of rpul +0x735..+0x777, and of `fulc` and `loca`.
+2. ~~`gcrg` `cat`/`sub` selection~~ (section 3.1). Award kinds 2, 3, 4 and 7, and the callers of kind 9. Which hopper fields fill the matchmaking cR options (0x8373FE80 +0x70, +0x78/+0x7C, +0xAC/+0xB4..+0xBC).
+3. Meaning of rpdl +0x208..+0x215, of rpul +0x735..+0x777, and of `fulc` and `loca` (the i16 counters of blocks A/B are commendation progress, section 3.1).
 4. The `dcha` entry bytes beyond [0..1], and the expiry units (FILETIME?).
 5. Source of the DLC/promo mask at 0x8391F5EC (user.bin? content enumeration? avatar awards?). Contents of user.bin.
 6. Whether any UI gates the Armory or credits on being online or synced. The code paths seen work in state 1.

@@ -24,9 +24,11 @@ def multipart(data, kind="reward-sync"):
             b"\r\n" + BOUNDARY + b"--\r\n")
 
 
-def rpul(cookies, owned=(), gamertag=b"Noble Six"):
+def rpul(cookies, owned=(), gamertag=b"Noble Six", commendations=None):
     payload = bytearray(lsp.RPUL_SIZE)
     struct.pack_into(">ii", payload, 0, cookies, 1)
+    for index, progress in (commendations or {}).items():
+        struct.pack_into(">h", payload, 8 + 2 * index, progress)
     for item in owned:
         payload[0x108 + item] = 1
     payload[0x735:0x735 + len(gamertag)] = gamertag
@@ -72,6 +74,15 @@ class LspTest(unittest.TestCase):
         record = lsp.load_player(0x0009000000000042)
         self.assertEqual(record["gamertag"], "Noble Six")
         self.assertIn("challenge_progress", record)
+
+    def test_commendation_progress_is_kept(self):
+        # Block A +8: one i16 of progress per commendation (raised by kills in a matchmade
+        # game, for example).
+        url = "/gameapi_omaha/UserUpdateRewards.ashx?&getDailyChallenges=1&userId=0009000000000043"
+        self.rpdl(self.post(url, rpul(5753, commendations={0: 1, 7: 1, 8: 1, 13: 1})))
+        reply = self.rpdl(self.post(url, rpul(5000, commendations={7: 4})))
+        progress = struct.unpack_from(">128h", reply, 8)
+        self.assertEqual({i: v for i, v in enumerate(progress) if v}, {0: 1, 7: 4, 8: 1, 13: 1})
 
     def test_presence(self):
         payload = bytearray(0x1BB)

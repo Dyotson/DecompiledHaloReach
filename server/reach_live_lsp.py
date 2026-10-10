@@ -10,8 +10,10 @@ big-endian. The game matches chunks by fourcc and major version.
 What is answered (docs/online_plan.md section 5.1, docs/progression_re.md section 2):
 
 - POST /gameapi_omaha/UserUpdateRewards.ashx (rewards sync): `rpul` v3 upload (+ `chpr`
-  challenge progress), `rpdl` v2 reply. The server keeps each player's Credits, counters and
-  Armory flags and never lowers them, so a reinstalled game gets its progression back.
+  challenge progress), `rpdl` v2 reply. The server keeps each player's Credits,
+  commendation progress and Armory flags and never lowers them, so a reinstalled game gets
+  its progression back. The game syncs at sign-in, every 10 minutes, after a purchase and
+  after every matchmade game.
 - POST /ReachPresenceApi/heartbeat.ashx (`phbt` v5): `phbr` v2 reply with no reservations.
 - POST /ReachPresenceApi/query.ashx (`preq` v3): `pplr` v5 reply with no records.
 - /gameapi_omaha/Files*.ashx: File Share (reach_live_files.py).
@@ -115,14 +117,14 @@ def save_player(xuid, record):
 
 # --- Rewards (Credits, rank, Armory) -----------------------------------------------
 
-BLOCK_SIZE = 0x208   # cookies i32, award count i32, i16[32][4] counters, u8 itemflags[256]
+BLOCK_SIZE = 0x208   # cookies i32, award count i32, i16[128] commendation progress, u8 itemflags[256]
 RPUL_SIZE = 0x778
 RPDL_SIZE = 0x21B
 
 
 def merge_block(saved, uploaded):
     """The server's view of the totals block: never lower than either side. Credits,
-    counts and counters take the maximum, Armory flags the union."""
+    award counts and commendation progress take the maximum, Armory flags the union."""
     if not saved:
         return uploaded
     cookies = max(struct.unpack_from(">i", saved, 0)[0], struct.unpack_from(">i", uploaded, 0)[0])
