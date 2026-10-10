@@ -14,7 +14,8 @@
 // window shows, at the draw resolution scale, e.g. --resolution_scale=2) as
 // reach_shot_<secs>.ppm in the same directory whenever that file appears.
 //
-// REACH_FPSLOG=1 logs the guest frame rate (VdSwap calls) every 5 seconds.
+// Frame rate and stutter statistics (RECOMP_PERF=1, formerly REACH_FPSLOG=1) are timed
+// here per guest frame; see frame_stats.h.
 //
 // REACH_INVALIDATE_AT="20" fires the physical-memory write callbacks over the
 // whole 0xA0000000 mirror once at that time, forcing the GPU to drop and
@@ -28,6 +29,7 @@
 // too much between runs for fixed times to land on the same shot.
 
 #include "../platform/guest_memory.h"
+#include "frame_stats.h"
 #include "../platform/sdk_import.h"
 
 #include <rex/logging.h>
@@ -256,20 +258,7 @@ extern "C" REX_FUNC(__imp__VdSwap) {
       std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
   MaybeTriggerRenderDocCapture(elapsed);
   MaybeInvalidatePhysicalMemory(elapsed);
-  static const bool fps_log = [] {
-    const char* v = std::getenv("REACH_FPSLOG");
-    return v && *v && *v != '0';
-  }();
-  if (fps_log) {
-    static double window_start = elapsed;
-    static uint32_t swaps = 0;
-    ++swaps;
-    if (elapsed - window_start >= 5.0) {
-      REXLOG_INFO("REACH_FPSLOG: t={:.0f}s {:.1f} fps", elapsed, swaps / (elapsed - window_start));
-      window_start = elapsed;
-      swaps = 0;
-    }
-  }
+  reach::perf::OnGuestFrame();
   Schedule& schedule = GetSchedule();
   static const char* dump_trigger = std::getenv("REACH_FRAMEDUMP_TRIGGER");
   static int dump_polls = 0;

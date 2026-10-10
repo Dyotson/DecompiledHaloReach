@@ -46,6 +46,7 @@ endif()
 set(REACH_SOURCES
     src/main.cpp
     src/debug/frame_dump.cpp
+    src/debug/frame_stats.cpp
     src/debug/gamestate_trace.cpp
     src/debug/texture_trace.cpp
     src/hooks/mouse_look.cpp
@@ -66,6 +67,7 @@ set(REACH_SOURCES
     src/kernel/xecrypt_rsa.cpp
     src/platform/sdk_import.cpp
     src/platform/socket.cpp
+    src/platform/vulkan_hooks.cpp
     src/input/kbm.cpp
 )
 
@@ -78,6 +80,17 @@ else()
 endif()
 
 rexglue_setup_target(reach GPU_PLUGINS xenos)
+
+# src/platform/vulkan_hooks.cpp includes the SDK's Vulkan headers, which include
+# <renderdoc_app.h> from this interface target and the X11/Wayland client headers
+# (stand-ins in src/platform/wsi_stubs, so no window-system packages are needed).
+if(TARGET rex::renderdoc)
+    target_link_libraries(reach PRIVATE rex::renderdoc)
+endif()
+if(UNIX AND NOT APPLE)
+    set_source_files_properties(src/platform/vulkan_hooks.cpp PROPERTIES
+        INCLUDE_DIRECTORIES "${CMAKE_CURRENT_SOURCE_DIR}/src/platform/wsi_stubs")
+endif()
 
 # The SDK's SPIR-V translator takes the texture-fetch exponent bias from the
 # wrong fetch-constant word, which scales Reach's textures by 1/256 (black

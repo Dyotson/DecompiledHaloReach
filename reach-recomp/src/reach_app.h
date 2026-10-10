@@ -11,13 +11,18 @@
 #include <rex/runtime.h>
 #include <rex/system/gpu_plugin.h>
 
+#include "debug/frame_stats.h"
 #include "input/kbm.h"
+#include "platform/vulkan_hooks.h"
 
 #include <filesystem>
 #include <string>
 
 // GPU backend on Windows (the gpu_backend setting, src/main.cpp).
 std::string ReachGpuBackend();
+
+// This game's defaults for SDK settings (src/main.cpp); reach.toml still overrides them.
+void ApplyReachCvarDefaults();
 
 class ReachApp : public rex::ReXApp {
  public:
@@ -29,19 +34,39 @@ class ReachApp : public rex::ReXApp {
         PPCImageConfig));
   }
 
+  // Runs after reach.toml and the command line are applied, before the window opens.
+  void OnPostInitLogging() override { ApplyReachCvarDefaults(); }
+
   void OnPreSetup(rex::RuntimeConfig& config) override {
     if (!config.graphics && config.gpu_plugin.empty()) {
       config.gpu_plugin = "xenos";
     }
     // Keyboard and mouse on guest user 0, next to the SDK's pads (docs/input.md).
     config.input_factory = reach::kbm::CreateInputSystem;
-#ifdef _WIN32
+    // Loaded here rather than by the SDK so OnCreateDialogs can reach the GPU provider.
     // The plugin's "any" backend picks D3D12 first on Windows; this project's GPU fixes
     // (patches/rexglue-sdk) are in the Vulkan backend.
     if (!config.graphics && !config.gpu_plugin.empty()) {
+#ifdef _WIN32
       config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin, ReachGpuBackend());
-    }
+#else
+      config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin);
 #endif
+    }
+    graphics_ = config.graphics.get();
+  }
+
+  // The GPU provider exists now and the window has no swapchain yet: hook the Vulkan
+  // calls (swapchain present-mode log, RECOMP_PERF timing; src/platform/vulkan_hooks.h).
+  void OnCreateDialogs(rex::ui::ImGuiDrawer*) override { reach::InstallVulkanHooks(graphics_); }
+
+  void OnPostSetup() override { reach::InstallVulkanHooks(runtime()->graphics_system()); }
+
+  // The SDK hard-exits right after a close request is accepted (SIGINT included), so the
+  // frame statistics summary is written here.
+  bool OnWindowCloseRequested() override {
+    reach::perf::Shutdown();
+    return true;
   }
 
   // Reach keeps preferences and streamed map/tag caches on the console's
@@ -69,14 +94,13 @@ class ReachApp : public rex::ReXApp {
   }
 
   // Override virtual hooks for customization:
-  // void OnPostInitLogging() override {}
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
-  // void OnPostSetup() override {}
-  // void OnCreateDialogs(rex::ui::ImGuiDrawer* drawer) override {}
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
   // std::unique_ptr<rex::ui::AchievementNotificationDialog>
   // CreateAchievementNotificationDialog() override;
-  // void OnShutdown() override {}
   // void OnConfigurePaths(rex::PathConfig& paths) override {}
+
+ private:
+  rex::system::IGraphicsSystem* graphics_ = nullptr;  // owned by the SDK
 };
