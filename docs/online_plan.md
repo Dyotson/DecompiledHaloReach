@@ -1,14 +1,23 @@
 # P2P online: findings and plan
 
-Status (2026-10-09, night): M0-M3 done for Firefight, M4 (internet) working. Two instances
-join the same System Link lobby and play a Firefight match together, on one machine
-(`REACH_NET=1`, the virtual network in section 4) and through a **Reach Live server**
-(section 5, `REACH_SERVER=host`): the server lists every connected player's System Link
-games in the game's own browser and connects players directly through UDP hole punching,
-or relays their traffic when that fails. Host migration works: when the host's process is
-killed mid-match, the other player sees "Waiting for host…", becomes the host and the match
-goes on ("Noble Six quit"). Not yet tried: a full match to the postgame, Custom Games, more
-than two players, separate machines across real NATs.
+Status (2026-10-09, late night): M0-M4 done. Players connect to a self-hosted **Reach Live
+server** (section 5) and play together over the internet in two ways:
+
+- **Xbox LIVE (emulated, the default with a server):** the profile is signed in to "Xbox
+  LIVE"; lobbies are open to friends, and every other player on the server is a friend. The
+  lobby roster lists them with their game ("In Firefight Lobby 1/16") and "Join" works:
+  presence, session search, QoS game details and the secure connection are answered by our
+  layer (section 5.2). Verified: a friend joins a Firefight lobby from the roster and both
+  play the match.
+- **System Link:** every connected player's System Link games appear in the game's own
+  browser (also on one machine with `REACH_NET=1`, the virtual network in section 4).
+  Verified: Firefight with two players, Slayer on Sword Base with three, host migration
+  (killing the host mid-match: the other player sees "Waiting for host…", becomes the host
+  and the match goes on).
+
+Traffic goes directly between players through UDP hole punching, or through the server when
+that fails. Not yet tried: a full match to the postgame, separate machines across real NATs.
+Not available: matchmaking (signed playlists, section 5.1), file share, Xbox LIVE party.
 `tools/system_link_pair.sh` sets up a pair (with `REACH_SERVER` set, through a server).
 "Guess" marks statements not confirmed by code or a run.
 
@@ -336,16 +345,14 @@ Measured on one machine (relay forced with `REACH_SERVER_RELAY=1`): a Firefight 
 two players is about 4 KB/s and 60 packets/s through the server in total, so a small VPS can
 relay many games. The lobby, the join and the match work both directly and relayed.
 
-Not done yet (next steps for "Live"): the game still thinks it is offline (signed in locally,
-System Link menus), so Live-only features (matchmaking playlists, Xbox Live parties and
-invites, file share, Bungie's challenges) are not available. Making the profile "signed in
-to Xbox Live" and answering the XSession / friends / presence / title storage requests from
-the server is the next layer.
+Settings: the same options live in `reach.toml` next to the executable and in the F4
+settings overlay under "Network/Reach Live" (`live_server`, `live_signin`, `live_room`,
+`gamertag`); the environment variables override them. Changes apply on the next start.
 
 ### 5.1 Title servers ("LSP")
 
 Bungie ran Reach's online services as Xbox Live title servers ("LSP"): HTTP/1.0 over TCP.
-With Live sign-in (`REACH_LIVE_SIGNIN=1`) the Reach Live server's HTTP port plays that role
+With Live sign-in (the default with a server) the Reach Live server's HTTP port plays that role
 (`src/kernel/live_lsp.cpp`, `src/kernel/live_tcp.cpp`, `server/reach_live_lsp.py`).
 
 - **Discovery.** The game enumerates title servers with XTitleServerCreateEnumerator (XAM
@@ -397,3 +404,33 @@ Not done: hopper files (matchmaking playlists, game and map variants, all signed
 share (`FilesGetCatalog.ashx`, `FilesUpload.ashx`, … and user storage), Arena, the
 Bungie presence record layout, and a stable machine id (the `machineId` the game sends is
 derived from the XNADDR, which changes with the server's epoch).
+
+### 5.2 Xbox LIVE: friends, presence, sessions
+
+With a server and `live_signin` (on by default), `src/kernel/xam_signin.cpp` reports user 0
+signed in to Live (sign-in state 2, Live-enabled flag, all privileges, ONLINE XNADDR flag)
+and `src/kernel/live_xmsg.cpp` answers the XAM messages behind Live, which the SDK fails or
+stubs. Every player in our room on the server is a friend.
+
+| Message | What the game does with it | Our answer |
+| --- | --- | --- |
+| XStringVerify (0xFC/0x5000C) | checks user text; retried every frame while it failed | every string OK |
+| XFriendsCreateEnumerator (0xFC/0x58020) | the friends list (100 × 0xC4 X_ONLINE_FRIEND), read at sign-in and again on XN_FRIENDS_FRIEND_ADDED | the room's players with their presence |
+| XPresenceSubscribe / Unsubscribe / CreateEnumerator (0xFC/0x5801E, 0x58044, 0x58019) | the roster's presence (X_ONLINE_PRESENCE, 0xA4: state, session id at +0xC); subscribe was retried every frame while it failed | presence from the roster |
+| XSessionCreate / Delete / Modify / Join / Leave (0xFB/0xB0010-0xB0013, 0xB0018) | sessions for lobbies and parties | for a session we host: an online peer session id (0x80 type), our XNADDR and a random key in XSESSION_INFO; the newest joinable presence session is published with its slots. Leave (0xB0013) had no SDK handler |
+| XSessionSearchByIds / ByID (0xFB/0xB0060, 0xB001B) | turns friends' session ids into XSESSION_INFO (host XNADDR, key) | the session each player published |
+| XNetQosListen / XNetQosLookup | the host publishes its game description (the same bitstream as the System Link reply, 0x98 bytes); joiners probe it for "In Firefight Lobby 1/16" | the data travels with the host's presence; lookups are answered at once (XNQOS from `SystemHeapAlloc`, released by the SDK's XNetQosRelease) |
+| XamUserAreUsersFriends, XNetLogonGetTitleID / MachineID | | from the roster; 0x4D53085B; 0xFA000000 + XUID |
+
+Presence on the server: each client sends its friend state, the XSESSION_INFO of its joinable
+session, a status line and opaque extras (slots and QoS data) in a `presence` message (type
+13); `list` returns them for the room. When the roster changes the client posts
+XN_FRIENDS_FRIEND_ADDED (0x04000002) and XN_FRIENDS_PRESENCE_CHANGED (0x04000001); Reach's
+notification loop (`Function_826F7BD0`) then re-reads friends (`0x82320778`) and presence
+(`0x8232E190`).
+
+Roster internals (from Ghidra): the active roster's providers are at 0x82A43E08 (type 1:
+friends, per local user at `*0x8315107C`, count at +0x7C; type 2: Xbox LIVE party at
+`*0x83151040` + 0x1E18, 0x78-byte XPARTY_USER_INFO). The `XFriendsCreateEnumerator` task at
+0x82A9666C (started by `Function_822688D8` on the Guide's gamercard notification 0x06010004)
+is the Guide's "join from gamercard" path, not the roster.

@@ -21,8 +21,8 @@ const std::string& LiveRoom();
 // A Reach Live server is configured.
 bool LiveMode();
 
-// Live mode and REACH_LIVE_SIGNIN=1 (or the live_signin setting): the profile reports
-// "signed in to Xbox Live".
+// Live mode and the live_signin setting (on by default; REACH_LIVE_SIGNIN=0/1
+// overrides): the profile reports "signed in to Xbox Live".
 bool LiveSignin();
 
 // XUID of the signed-in player: REACH_XUID, else the online XUID of the saved Live

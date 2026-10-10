@@ -10,7 +10,7 @@
 // one (REACH_XUID / REACH_GAMERTAG, or the Live identity with REACH_SERVER); the
 // SDK gives every instance 0xB13EBABEBABEBABE "User".
 //
-// With a Reach Live server and REACH_LIVE_SIGNIN=1, user 0 is signed in to Live:
+// With a Reach Live server and Live sign-in (identity.h: LiveSignin), user 0 is signed in to Live:
 // the sign-in state is 2, the info has the Live-enabled flag and every privilege
 // is granted.
 

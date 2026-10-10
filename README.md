@@ -51,7 +51,7 @@ the game (see [Legal](#legal)).
 | Campaign (Winter Contingency) | Loads, plays the opening and reaches gameplay; rendering matches Xenia after 19 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); real occlusion queries, so the game no longer issues the water draw that hangs the GPU |
 | Progression (cR/rank/Armory) | Works offline: cR earned in play, rank-ups, Armory purchases saved in the profile, Spartan preview in the Armory and post-game screens, daily and weekly challenges picked locally each day ([`docs/progression_re.md`](docs/progression_re.md)) |
 | Forge | Works locally: editing on Sword Base, object placement, saving map variants |
-| Online P2P | System Link games work over the internet through a self-hosted **Reach Live** server: players see each other's games in the System Link browser, join and play Firefight; direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Tested with two instances on one machine. Xbox Live features (matchmaking, parties, file share) are next |
+| Online | Over the internet through a self-hosted **Reach Live** server: an emulated Xbox LIVE (friends roster, presence, joining a friend's lobby) and System Link (the game's browser lists everyone's games). Tested with up to three players on one machine: Firefight and Slayer, host migration. Direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Matchmaking, file share and Xbox LIVE party are not available |
 | File share | Not started |
 | Keyboard and mouse | On by default next to pads: Halo-style bindings (rebindable `kbm_bind_*` cvars) and raw mouse look fed straight into player control, no stick emulation ([`docs/input.md`](docs/input.md)) |
 
@@ -100,16 +100,21 @@ Anyone can run a server; it needs Python 3 and one open UDP port:
 python3 server/reach_live_server.py --port 21100 --http-port 21101
 ```
 
-Players start the game pointed at it, then use System Link from the lobby (Y, "Select
-Network"):
+Players point the game at it, in `reach.toml` next to the executable (or the F4 settings
+overlay, "Network/Reach Live"):
 
-```sh
-REACH_SERVER=your.server.org tools/run_reach.sh 3600
+```toml
+live_server = "your.server.org"   # host[:port], port 21100 by default
+gamertag = "Noble Six"             # optional
 ```
 
-Your gamertag is in `~/.local/share/reach/4D53085B/live_identity.txt` (created on the first
-online run). `REACH_ROOM=name` keeps a group of players to themselves. Details and the
-protocol: [`docs/online_plan.md`](docs/online_plan.md) section 5.
+or with `REACH_SERVER=your.server.org tools/run_reach.sh 3600`. The game then signs in to an
+emulated Xbox LIVE: everyone on the server is your friend, friends in a game show up in the
+lobby roster, and X joins them. System Link (Y, "Select Network") lists everyone's System
+Link games too. Your gamertag is in `~/.local/share/reach/4D53085B/live_identity.txt`
+(created on the first online run). `live_room` keeps a group of players to themselves;
+`live_signin = false` stays offline-style (System Link only). Details and the protocol:
+[`docs/online_plan.md`](docs/online_plan.md) section 5.
 
 ## Repository layout
 

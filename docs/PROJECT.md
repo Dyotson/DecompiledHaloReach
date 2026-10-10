@@ -212,6 +212,16 @@ Check exact param names in `endpoints.json` before calling.
   scope), pitch clamps at straight up/down, fire/zoom/swap/jump/crouch/move and menu keys work.
   `docs/input.md`.
 
+- 2026-10-09 (late night): **emulated Xbox LIVE and keyboard/mouse.**
+  - Reach Live signs the profile in to "Xbox LIVE" (on by default with a server): friends
+    roster from the server, presence, session search, QoS game details; a friend joins a
+    Firefight lobby from the roster and they play the match (`docs/online_plan.md` 5.2).
+    Bungie's title servers: rewards sync answered by the server (5.1).
+  - System Link through the server: Slayer on Sword Base with three players; host
+    migration works.
+  - Keyboard and mouse with direct mouse look (`docs/input.md`).
+  - SDK patch 0020 also moves the viz-query logs to debug level (1000+ lines a second).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

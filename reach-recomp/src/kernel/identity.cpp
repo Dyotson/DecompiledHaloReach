@@ -24,7 +24,7 @@
 REXCVAR_DEFINE_STRING(live_server, "", "Network/Reach Live",
                       "Reach Live server, host[:port] (port 21100 by default). Empty: offline "
                       "(REACH_SERVER overrides)");
-REXCVAR_DEFINE_BOOL(live_signin, false, "Network/Reach Live",
+REXCVAR_DEFINE_BOOL(live_signin, true, "Network/Reach Live",
                     "Sign in to Xbox LIVE through the Reach Live server: friends, Live lobbies "
                     "(REACH_LIVE_SIGNIN overrides)");
 REXCVAR_DEFINE_STRING(live_room, "", "Network/Reach Live",

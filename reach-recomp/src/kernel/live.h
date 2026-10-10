@@ -8,6 +8,9 @@
 
 namespace reach {
 
+// The virtual network is on (REACH_NET or a Reach Live server).
+bool NetworkOn();
+
 // The Reach Live server's IPv4 address (host order) and the TCP port of its title
 // servers (HTTP). False without REACH_SERVER, or before the server welcomed us.
 // TCP connections the game opens to this address are sent to that port.
@@ -21,6 +24,7 @@ struct LiveFriend {
   uint32_t state = 0;           // X_ONLINE_FRIENDSTATE flags it reported
   uint8_t session[0x3C] = {};   // XSESSION_INFO of its joinable session, zeros if none
   std::string status;           // presence line
+  std::vector<uint8_t> extra;   // its hosted session's slots and QoS data (live_xmsg.cpp)
 };
 
 // The other players in the room, as of the server's last answer (refreshed every 3 s).
@@ -28,7 +32,8 @@ std::vector<LiveFriend> LiveRoster();
 
 // Our presence: X_ONLINE_FRIENDSTATE flags, the XSESSION_INFO friends can join (null:
 // none) and a status line. Sent to the server now and with every keep-alive.
-void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::string& status);
+void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::string& status,
+                     const std::vector<uint8_t>& extra = {});
 
 // This instance's XNADDR (36 bytes, guest layout).
 void LiveSelfXnAddr(uint8_t* xnaddr);

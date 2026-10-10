@@ -468,7 +468,8 @@ class VNet {
     return roster_;
   }
 
-  void SetPresence(uint32_t state, const uint8_t* session_info, const std::string& status) {
+  void SetPresence(uint32_t state, const uint8_t* session_info, const std::string& status,
+                   const std::vector<uint8_t>& extra) {
     {
       std::lock_guard<std::mutex> lock(mutex_);
       presence_.assign(4 + 0x3C, 0);
@@ -477,6 +478,7 @@ class VNet {
       const std::string line = status.substr(0, 255);
       presence_.push_back(uint8_t(line.size()));
       presence_.insert(presence_.end(), line.begin(), line.end());
+      presence_.insert(presence_.end(), extra.begin(), extra.begin() + std::min<size_t>(extra.size(), 1024));
     }
     SendPresence();
   }
@@ -888,6 +890,10 @@ class VNet {
           const size_t status_size = std::min<size_t>(p[pos], n - pos - 1);
           f.status.assign(reinterpret_cast<const char*>(p + pos + 1), status_size);
           pos += 1 + status_size;
+          if (pos + 2 > n) return;
+          const size_t extra_size = std::min<size_t>(Load16(p + pos), n - pos - 2);
+          f.extra.assign(p + pos + 2, p + pos + 2 + extra_size);
+          pos += 2 + extra_size;
           roster_parts_seen_++;
           if (f.id != live_id_) roster_parts_.push_back(std::move(f));
         }
@@ -897,6 +903,7 @@ class VNet {
             const reach::LiveFriend &a = roster_parts_[i], &b = roster_[i];
             membership = a.id != b.id;
             changed = changed || membership || a.state != b.state || a.status != b.status ||
+                      a.extra != b.extra ||
                       std::memcmp(a.session, b.session, sizeof(a.session)) != 0;
           }
           roster_ = roster_parts_;
@@ -998,6 +1005,8 @@ void SetError(uint32_t error) { rex::system::XThread::SetLastError(error); }
 }  // namespace
 
 namespace reach {
+bool NetworkOn() { return NetOn(); }
+
 bool LiveServerHttp(uint32_t& ip, uint16_t& port) {
   return NetOn() && VNet::Get().LiveServerHttp(ip, port);
 }
@@ -1007,8 +1016,9 @@ std::vector<LiveFriend> LiveRoster() {
   return VNet::Get().Roster();
 }
 
-void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::string& status) {
-  if (NetOn()) VNet::Get().SetPresence(state, session_info, status);
+void LiveSetPresence(uint32_t state, const uint8_t* session_info, const std::string& status,
+                     const std::vector<uint8_t>& extra) {
+  if (NetOn()) VNet::Get().SetPresence(state, session_info, status, extra);
 }
 
 void LiveSelfXnAddr(uint8_t* xnaddr) { VNet::Get().WriteSelfXnAddr(xnaddr); }
@@ -1097,7 +1107,7 @@ REACH_NET_FUNC(NetDll_XNetUnregisterInAddr, NetOn(), ctx.r3.u64 = 0)
 REACH_NET_FUNC(NetDll_XNetConnect, NetOn(), ctx.r3.u64 = 0)
 // XNET_CONNECT_STATUS_CONNECTED
 REACH_NET_FUNC(NetDll_XNetGetConnectStatus, NetOn(), ctx.r3.u64 = 2)
-REACH_NET_FUNC(NetDll_XNetQosListen, NetOn(), ctx.r3.u64 = 0)
+// XNetQosListen / XNetQosLookup: src/kernel/live_xmsg.cpp.
 
 // INT XNetXnAddrToMachineId(const XNADDR* pxnaddr, ULONGLONG* pqwMachineId)
 REACH_NET_FUNC(NetDll_XNetXnAddrToMachineId, NetOn(), {
@@ -1127,7 +1137,6 @@ REACH_NET_FUNC(NetDll_XNetServerToInAddr, reach::LiveSignin() && ctx.r6.u32, {
   Store32(base + ctx.r6.u32, ctx.r4.u32);
   ctx.r3.u64 = 0;
 })
-REACH_NET_TRACE(NetDll_XNetQosLookup)
 REACH_NET_TRACE(NetDll_XNetQosServiceLookup)
 REACH_NET_TRACE(NetDll_XNetQosRelease)
 REACH_NET_TRACE(NetDll_XNetQosGetListenStats)

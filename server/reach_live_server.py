@@ -28,6 +28,7 @@ VERSION = 1
 (HELLO, WELCOME, ERROR, BROADCAST, RELAY, FORWARD, PUNCH, PUNCH_ACK, DATA, BYE, LIST, PEERS,
  PRESENCE) = range(1, 14)
 SESSION_INFO_SIZE = 0x3C  # XSESSION_INFO: session id, host XNADDR, key-exchange key
+MAX_PRESENCE_EXTRA = 1024
 
 PEER_TIMEOUT = 30.0  # seconds without a HELLO before a peer is dropped
 MAX_PAYLOAD = 1500
@@ -53,6 +54,7 @@ class Peer:
         self.state = 0
         self.session = bytes(SESSION_INFO_SIZE)
         self.status = ""
+        self.extra = b""  # slots and QoS data of the hosted session, opaque to the server
 
 
 def ip_to_u32(ip):
@@ -172,27 +174,33 @@ class ReachLive(asyncio.DatagramProtocol):
         self.send(dst.addr, FORWARD, self.forward_header(src) + body[4:])
 
     def on_presence(self, peer, body):
+        """State u32, XSESSION_INFO, status (u8 length + UTF-8), then optional bytes the
+        clients define (session slots, QoS data), passed on as they are."""
         (state,) = struct.unpack_from(">I", body, 0)
         session = body[4:4 + SESSION_INFO_SIZE]
         status_len = body[4 + SESSION_INFO_SIZE]
-        status = body[5 + SESSION_INFO_SIZE:5 + SESSION_INFO_SIZE + status_len].decode()
+        end = 5 + SESSION_INFO_SIZE + status_len
+        status = body[5 + SESSION_INFO_SIZE:end].decode()
+        extra = body[end:end + MAX_PRESENCE_EXTRA]
         if len(session) != SESSION_INFO_SIZE:
             return
         if (state, session, status) != (peer.state, peer.session, peer.status):
             log.info("presence #%d %r state %08X session %s %r", peer.id, peer.name, state,
                      session[:8].hex(), status)
-        peer.state, peer.session, peer.status = state, session, status
+        peer.state, peer.session, peer.status, peer.extra = state, session, status, extra
 
     def on_list(self, src, addr):
         """The room's players (the asker first): the friends list of a Live player.
         Each: id u32, XUID u64, gamertag (u8 length + UTF-8), presence state u32,
-        XSESSION_INFO, status (u8 length + UTF-8). Sent in parts that fit a datagram."""
+        XSESSION_INFO, status (u8 length + UTF-8), extra (u16 length + bytes). Sent in
+        parts that fit a datagram."""
         peers = ([src] + self.room_peers(src))[:100]
         entries = []
         for p in peers:
             name, status = p.name.encode(), p.status.encode()[:255]
             entries.append(struct.pack(">IQB", p.id, p.xuid, len(name)) + name +
-                           struct.pack(">I", p.state) + p.session + bytes([len(status)]) + status)
+                           struct.pack(">I", p.state) + p.session + bytes([len(status)]) + status +
+                           struct.pack(">H", len(p.extra)) + p.extra)
         # Part header: total players u16, index of the first entry u16, entries in part u16.
         start = 0
         while True:

@@ -96,7 +96,7 @@ class ServerTest(unittest.TestCase):
         b = Client(self.addr, b"Jun", 0x0009000000000012, room=b"r2")
         a_id, b_id = a.hello(), b.hello()
         session = bytes(range(0x3C))
-        a.send(PRESENCE, struct.pack(">I", 0x13) + session + bytes([5]) + b"lobby")
+        a.send(PRESENCE, struct.pack(">I", 0x13) + session + bytes([5]) + b"lobby" + b"qos!")
         time.sleep(0.2)
         b.send(LIST, b"")
         kind, body = b.recv()
@@ -114,9 +114,12 @@ class ServerTest(unittest.TestCase):
             pos += 4 + 0x3C
             status = body[pos + 1:pos + 1 + body[pos]]
             pos += 1 + body[pos]
-            seen[pid] = (name, state, info, status)
+            (extra_len,) = struct.unpack_from(">H", body, pos)
+            extra = body[pos + 2:pos + 2 + extra_len]
+            pos += 2 + extra_len
+            seen[pid] = (name, state, info, status, extra)
         self.assertEqual(list(seen)[0], b_id)  # the asker first
-        self.assertEqual(seen[a_id], (b"Carter", 0x13, session, b"lobby"))
+        self.assertEqual(seen[a_id], (b"Carter", 0x13, session, b"lobby", b"qos!"))
 
     def test_unregistered_sender_is_told(self):
         d = Client(self.addr, b"Delta", 0x0009000000000004)

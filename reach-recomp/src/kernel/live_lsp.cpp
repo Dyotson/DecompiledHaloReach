@@ -9,7 +9,7 @@
 // XNetServerToInAddr(ina, 0x4D530064) and opens an HTTP/1.0 connection on a port of
 // the configured LSP range (Lsp_ResolveServerAddress 0x82271E38).
 //
-// With Live sign-in (REACH_SERVER + REACH_LIVE_SIGNIN=1) the enumeration returns one
+// With Live sign-in (a server and live_signin, the default) the enumeration returns one
 // title server: the Reach Live server, offering every service. net.cpp resolves its
 // address to itself and sends TCP connections to it to the server's HTTP port, where
 // server/reach_live_lsp.py answers. The marketplace asset enumeration (0x58042) is
