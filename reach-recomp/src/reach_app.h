@@ -9,10 +9,15 @@
 #include <rex/logging.h>
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
+#include <rex/system/gpu_plugin.h>
 
 #include "input/kbm.h"
 
 #include <filesystem>
+#include <string>
+
+// GPU backend on Windows (the gpu_backend setting, src/main.cpp).
+std::string ReachGpuBackend();
 
 class ReachApp : public rex::ReXApp {
  public:
@@ -30,6 +35,13 @@ class ReachApp : public rex::ReXApp {
     }
     // Keyboard and mouse on guest user 0, next to the SDK's pads (docs/input.md).
     config.input_factory = reach::kbm::CreateInputSystem;
+#ifdef _WIN32
+    // The plugin's "any" backend picks D3D12 first on Windows; this project's GPU fixes
+    // (patches/rexglue-sdk) are in the Vulkan backend.
+    if (!config.graphics && !config.gpu_plugin.empty()) {
+      config.graphics = rex::system::LoadGpuPlugin(config.gpu_plugin, ReachGpuBackend());
+    }
+#endif
   }
 
   // Reach keeps preferences and streamed map/tag caches on the console's

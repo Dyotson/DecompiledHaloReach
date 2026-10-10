@@ -10,6 +10,15 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
 include(generated/rexglue.cmake)
 
+# A cross build (tools/build_windows.sh) compiles the generated code the native build
+# made; it must not run codegen itself: the SDK's rexglue for the target cannot run here,
+# and regenerating would rewrite generated/ under the native build.
+if(CMAKE_CROSSCOMPILING AND TARGET rex::rexglue)
+    set_target_properties(rex::rexglue PROPERTIES
+        IMPORTED_LOCATION /usr/bin/true IMPORTED_LOCATION_RELEASE /usr/bin/true)
+    message(STATUS "Cross build: codegen is skipped; run the native build first")
+endif()
+
 # Sources
 set(REACH_SOURCES
     src/main.cpp
@@ -39,6 +48,8 @@ set(REACH_SOURCES
 
 if(WIN32)
     add_executable(reach WIN32 ${REACH_SOURCES})
+    target_compile_definitions(reach PRIVATE _CRT_SECURE_NO_WARNINGS)
+    target_link_libraries(reach PRIVATE ws2_32)
 else()
     add_executable(reach ${REACH_SOURCES})
 endif()

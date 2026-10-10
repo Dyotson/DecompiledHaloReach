@@ -177,7 +177,7 @@ struct SavedProgress {
 };
 
 bool LoadSaved(SavedProgress& out) {
-  FILE* f = std::fopen(SavePath().c_str(), "rb");
+  FILE* f = std::fopen(SavePath().string().c_str(), "rb");
   if (!f) return false;
   bool ok = std::fread(&out, sizeof(out), 1, f) == 1 && std::memcmp(out.magic, "RCHL", 4) == 0;
   std::fclose(f);
@@ -188,7 +188,7 @@ void WriteSaved(const SavedProgress& in) {
   std::filesystem::path path = SavePath();
   std::error_code ec;
   std::filesystem::create_directories(path.parent_path(), ec);
-  if (FILE* f = std::fopen(path.c_str(), "wb")) {
+  if (FILE* f = std::fopen(path.string().c_str(), "wb")) {
     std::fwrite(&in, sizeof(in), 1, f);
     std::fclose(f);
   }
