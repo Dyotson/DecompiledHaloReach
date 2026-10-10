@@ -65,6 +65,7 @@ set(REACH_SOURCES
     src/kernel/xam_keyboard.cpp
     src/kernel/xam_signin.cpp
     src/kernel/xecrypt_rsa.cpp
+    src/platform/achievement_toast.cpp
     src/platform/sdk_import.cpp
     src/platform/socket.cpp
     src/platform/vulkan_hooks.cpp

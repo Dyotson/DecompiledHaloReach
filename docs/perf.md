@@ -63,7 +63,7 @@ Per 10 s window, and over the whole measurement in the summary:
 | `pipelines` | graphics and compute pipelines the GPU plugin created in the window (guest shaders, render-target helpers): stutter from shader compilation shows here |
 
 The pipeline count leaves out the SDK presenter's own pipeline, which it rebuilds on every
-present (see below).
+present (see "Repaint pacing" below).
 
 ## Present modes
 
@@ -84,25 +84,39 @@ FIFO_RELAXED, FIFO. The game now allows only FIFO by default (`src/main.cpp`), b
   changes by at most 4/255, with no moving peak; only the clouds and the selection pulse
   move), so it is the presentation.
 - **FIFO_RELAXED tears too** at 30 fps: every image arrives after the vblank it was due for.
-- **MAILBOX does not tear, but spins.** The SDK's UI thread repaints nonstop whenever an
-  ImGui dialog exists, and the achievement notification dialog always does. On Windows the
-  SDK paces that with DXGI vblank waits; on Linux only a FIFO swapchain does. With MAILBOX
-  (and IMMEDIATE) the window is repainted thousands of times a second (about 4000 on the
-  main menu, 3300 in a game, on an idle machine), each time also rebuilding the output
-  pipeline and waiting for the previous repaint on the GPU: the presenter never stores the
-  swapchain format it built the pipeline for (`swapchain_effect_pipeline.swapchain_format`
-  in `vulkan_presenter.cpp`), so every paint sees a mismatch. That costs GPU time the game
-  and the compositor need. FIFO caps it at the display's refresh rate.
+- **MAILBOX does not tear**, and since the repaint fix below it is a fine choice too: no
+  vsync wait, so up to one refresh less latency than FIFO (7 ms at 144 Hz, 17 ms at 60 Hz).
+  It was not when the default was chosen: the window was then repainted thousands of times
+  a second (see below). FIFO stays the default because a vsync wait can never let the
+  presenter run away again, and it waits on the UI thread, never on the GPU emulation.
 
-FIFO's cost is up to one more refresh of latency (7 ms at 144 Hz, 17 ms at 60 Hz). To change
-it, in `reach.toml`:
+To change it, in `reach.toml`:
 
 ```toml
-vulkan_allow_present_mode_mailbox = true     # no tearing, lowest latency, repaints nonstop
+vulkan_allow_present_mode_mailbox = true     # no tearing, lowest latency
 vulkan_allow_present_mode_immediate = true   # the SDK's default: tears
 ```
 
 The command line works too (`tools/play.sh --vulkan_allow_present_mode_immediate=true`).
+
+### Repaint pacing
+
+The SDK's ImGui drawer asks for another repaint after every frame while any dialog is
+registered, and the SDK registers its achievement notification dialog for the whole run.
+On Windows the SDK paces those repaints with DXGI vblank waits; on Linux nothing did but a
+FIFO swapchain. With MAILBOX or IMMEDIATE the window was repainted about 4000 times a second
+on the main menu and 3300 in a game (idle machine), with FIFO 144 (the refresh rate), each
+time also rebuilding the presenter's output pipeline and waiting for the previous repaint on
+the GPU: the presenter never stores the swapchain format it built that pipeline for
+(`swapchain_effect_pipeline.swapchain_format` in `vulkan_presenter.cpp`; Xenia has the same
+gap), so every paint sees a mismatch.
+
+`reach-recomp/src/platform/achievement_toast.cpp` now registers the toast dialog only while a
+toast is on screen (4.5 s per achievement). The rest of the time no dialog is registered, the
+drawer detaches from the presenter, and the window is repainted once per guest frame in every
+present mode: 30 presents a second on the menus (60 during the intro), 144 while a toast or
+an overlay (F3, F4) is open. The pipeline rebuild is still there, now 30 times a second; it
+is in `librexruntime.so`, which this project does not rebuild on Linux.
 
 ## Results
 
@@ -129,6 +143,9 @@ GPU's busy percentage.
   first frame. The cold run compiles 147 pipelines in the first 10 s of frames (the intro
   and title screen; the worst frame took 642 ms) and 13 more in the next 10 s (67 ms); by the
   main menu nothing is left to compile.
+- These runs predate the repaint fix (commit after `e2ff973`). With it, functional runs show
+  30 presents a second on the main menu with FIFO and with IMMEDIATE, and the game still at
+  30.0 fps; clean numbers for it are still to be taken.
 - Runs made earlier on a busy machine (two more Reach instances, each repainting nonstop) are
   not in the table: there the windowed FIFO and MAILBOX runs got only 12-20 presents a second
   in gameplay, because the compositor itself was starved of GPU time.

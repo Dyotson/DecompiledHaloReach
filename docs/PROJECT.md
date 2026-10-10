@@ -278,7 +278,10 @@ Check exact param names in `endpoints.json` before calling.
   use from 2.4 to 1.8 cores (menu), and the game holds 30.0 fps either way. `RECOMP_PERF=1`
   (`src/debug/frame_stats.cpp`, replacing `REACH_FPSLOG`) logs fps, percentiles, 1% lows,
   stutters and new pipelines for guest frames and host presents; `tools/bench.sh` measures
-  the main menu or a Custom Game, warm or cold (`docs/perf.md`).
+  the main menu or a Custom Game, warm or cold (`docs/perf.md`). The nonstop repaint came
+  from the SDK's achievement toast dialog, always registered with the ImGui drawer; it is
+  now registered only while a toast shows (`src/platform/achievement_toast.cpp`), and the
+  window is repainted once per guest frame in every present mode.
 
 ## Debugging recipes
 

@@ -150,10 +150,12 @@ only adjust it):
 - **Presentation** (`src/main.cpp`, `src/platform/vulkan_hooks.cpp`): the game sets the
   SDK's `vulkan_allow_present_mode_*` defaults to FIFO only (the SDK's IMMEDIATE tears) and
   wraps calls in the Vulkan device's function table to log swapchain present modes and time
-  presents. Not fixed: the presenter rebuilds its output pipeline on every paint (it never
-  stores `swapchain_format`) and, on Linux, repaints nonstop while any ImGui dialog exists
-  (the achievement notification always does). Both are in `librexruntime.so`;
-  [`docs/perf.md`](perf.md) has the details.
+  presents. On Linux the SDK repainted the window nonstop because its achievement
+  notification dialog is always registered with the ImGui drawer;
+  `src/platform/achievement_toast.cpp` registers it only while a toast shows. Not fixed: the
+  presenter rebuilds its output pipeline on every paint (it never stores `swapchain_format`;
+  Xenia has the same gap), now once per guest frame. [`docs/perf.md`](perf.md) has the
+  details.
 - `XamEnumerate` completion codes (`xam_enumerate.cpp`), headless `XamShowKeyboardUI`
   (`xam_keyboard.cpp`), files marked delete-on-close (`file_delete_on_close.cpp`), file size
   after writes (`file_size_refresh.cpp`), Winsock TCP (`live_tcp.cpp`) and the Xbox LIVE

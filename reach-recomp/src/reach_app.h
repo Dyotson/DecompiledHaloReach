@@ -10,9 +10,11 @@
 #include <rex/rex_app.h>
 #include <rex/runtime.h>
 #include <rex/system/gpu_plugin.h>
+#include <rex/ui/overlay/achievement_notification.h>
 
 #include "debug/frame_stats.h"
 #include "input/kbm.h"
+#include "platform/achievement_toast.h"
 #include "platform/vulkan_hooks.h"
 
 #include <filesystem>
@@ -62,6 +64,14 @@ class ReachApp : public rex::ReXApp {
 
   void OnPostSetup() override { reach::InstallVulkanHooks(runtime()->graphics_system()); }
 
+  // The SDK's achievement toasts, registered with the ImGui drawer only while one shows, so
+  // the window is not repainted nonstop (src/platform/achievement_toast.h).
+  std::unique_ptr<rex::ui::AchievementNotificationDialog> CreateAchievementNotificationDialog()
+      override {
+    return reach::MakeOnDemandToast(rex::ReXApp::CreateAchievementNotificationDialog(),
+                                    imgui_drawer(), app_context());
+  }
+
   // The SDK hard-exits right after a close request is accepted (SIGINT included), so the
   // frame statistics summary is written here.
   bool OnWindowCloseRequested() override {
@@ -97,8 +107,6 @@ class ReachApp : public rex::ReXApp {
   // void OnLoadXexImage(std::string& xex_image) override {}
   // void OnPostLoadXexImage() override {}
   // std::unique_ptr<rex::ui::ImGuiDialog> CreateAchievementsOverlay() override;
-  // std::unique_ptr<rex::ui::AchievementNotificationDialog>
-  // CreateAchievementNotificationDialog() override;
   // void OnConfigurePaths(rex::PathConfig& paths) override {}
 
  private:

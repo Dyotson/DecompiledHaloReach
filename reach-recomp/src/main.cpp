@@ -39,10 +39,10 @@ void ApplyReachCvarDefaults() {
   // tear (KDE and other Wayland compositors allow it): on the slowly panning menus the tear
   // line reads as a shimmer crawling down the screen. FIFO_RELAXED tears at 30 fps too,
   // since every frame arrives after the vblank it was due for. MAILBOX does not tear, but
-  // the SDK's UI thread repaints nonstop on Linux (an ImGui dialog is always open), and
-  // without a vsync wait that is hundreds to thousands of presents a second, each one
-  // rebuilding the output pipeline, for nothing. FIFO caps it at the display's refresh rate.
-  // reach.toml can allow the others again; docs/perf.md has the measurements.
+  // nothing paces the SDK's UI-thread repaints on Linux except a vsync wait: while an ImGui
+  // dialog was always registered, that was thousands of presents a second
+  // (src/platform/achievement_toast.h). FIFO keeps a cap on it, at up to one refresh of
+  // extra latency. reach.toml can allow the others again; docs/perf.md has the measurements.
   SetSdkCvarDefault("vulkan_allow_present_mode_immediate", "false");
   SetSdkCvarDefault("vulkan_allow_present_mode_mailbox", "false");
   SetSdkCvarDefault("vulkan_allow_present_mode_fifo_relaxed", "false");
