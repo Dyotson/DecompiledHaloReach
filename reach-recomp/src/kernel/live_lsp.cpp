@@ -15,6 +15,7 @@
 // server/reach_live_lsp.py answers. The marketplace asset enumeration (0x58042) is
 // empty. Every other enumerator goes to the SDK.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 #include "identity.h"
 #include "live.h"
@@ -30,6 +31,8 @@
 #include <cstdint>
 #include <cstring>
 #include <string>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -53,7 +56,7 @@ void Store32(uint8_t* p, uint32_t v) {
 std::string AllServices(const uint8_t* base) {
   std::string out;
   for (uint32_t i = 0; i < kServiceNameCount; ++i) {
-    const char* name = reinterpret_cast<const char*>(base + kServiceNames + 4 * i);
+    const char* name = reinterpret_cast<const char*>(GuestPtr(base, kServiceNames + 4 * i));
     size_t size = strnlen(name, 4);
     if (!size || size == 4) continue;
     if (!out.empty()) out += ',';
@@ -99,6 +102,6 @@ extern "C" REX_FUNC(__imp__XamCreateEnumeratorHandle) {
     REXLOG_INFO("REACH_LIVE: title server {}.{}.{}.{} (HTTP port {}) for services \"{}\"",
                 ip >> 24, (ip >> 16) & 0xFF, (ip >> 8) & 0xFF, ip & 0xFF, port, services);
   }
-  if (out_handle) Store32(base + out_handle, e->handle());
+  if (out_handle) Store32(GuestPtr(base, out_handle), e->handle());
   ctx.r3.u64 = 0;
 }

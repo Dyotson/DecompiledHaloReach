@@ -14,6 +14,7 @@
 // the sign-in state is 2, the info has the Live-enabled flag and every privilege
 // is granted.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 #include "identity.h"
 
@@ -26,6 +27,8 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -95,7 +98,7 @@ extern "C" REX_FUNC(__imp__XamUserGetSigninState) {
 extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
   const uint32_t user_index = ctx.r3.u32, info = ctx.r5.u32;
   if (NoSignin()) {
-    if (info) std::memset(base + info, 0, 0x28);
+    if (info) std::memset(GuestPtr(base, info), 0, 0x28);
     ctx.r3.u64 = kErrorNoSuchUser;
     return;
   }
@@ -103,12 +106,12 @@ extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
   if (sdk) sdk(ctx, base);
   if (ctx.r3.u32 != 0 || user_index != 0 || !info) return;
   // X_USER_SIGNIN_INFO: xuid at 0, name[16] at 24.
-  if (XuidOverride()) StoreXuid(base + info, XuidOverride());
-  if (GamertagOverride()) StoreName(base + info + 24, 16, GamertagOverride());
+  if (XuidOverride()) StoreXuid(GuestPtr(base, info), XuidOverride());
+  if (GamertagOverride()) StoreName(GuestPtr(base, info + 24), 16, GamertagOverride());
   if (reach::LiveSignin()) {
     // dwInfoFlags (+8): XUSER_INFO_FLAG_LIVE_ENABLED; UserSigninState (+12).
     base[info + 11] |= 1;
-    std::memset(base + info + 12, 0, 4);
+    std::memset(GuestPtr(base, info + 12), 0, 4);
     base[info + 15] = kSigninStateSignedInToLive;
   }
 }
@@ -117,14 +120,14 @@ extern "C" REX_FUNC(__imp__XamUserGetSigninInfo) {
 extern "C" REX_FUNC(__imp__XamUserGetXUID) {
   const uint32_t user_index = ctx.r3.u32, xuid = ctx.r5.u32;
   if (NoSignin()) {
-    if (xuid) std::memset(base + xuid, 0, 8);
+    if (xuid) std::memset(GuestPtr(base, xuid), 0, 8);
     ctx.r3.u64 = kErrorNoSuchUser;
     return;
   }
   static GuestFunc sdk = Sdk("__imp__XamUserGetXUID");
   if (sdk) sdk(ctx, base);
   if (ctx.r3.u32 == 0 && user_index == 0 && xuid && XuidOverride()) {
-    StoreXuid(base + xuid, XuidOverride());
+    StoreXuid(GuestPtr(base, xuid), XuidOverride());
   }
 }
 
@@ -139,7 +142,7 @@ extern "C" REX_FUNC(__imp__XamUserGetName) {
   static GuestFunc sdk = Sdk("__imp__XamUserGetName");
   if (sdk) sdk(ctx, base);
   if (ctx.r3.u32 == 0 && user_index == 0 && buffer && GamertagOverride()) {
-    StoreName(base + buffer, size, GamertagOverride());
+    StoreName(GuestPtr(base, buffer), size, GamertagOverride());
   }
 }
 
@@ -149,7 +152,7 @@ extern "C" REX_FUNC(__imp__XamUserGetName) {
 extern "C" REX_FUNC(__imp__XamUserCheckPrivilege) {
   const uint32_t user_index = ctx.r3.u32, result = ctx.r5.u32;
   if (NoSignin()) {
-    if (result) std::memset(base + result, 0, 4);
+    if (result) std::memset(GuestPtr(base, result), 0, 4);
     ctx.r3.u64 = kErrorNoSuchUser;
     return;
   }
@@ -157,7 +160,7 @@ extern "C" REX_FUNC(__imp__XamUserCheckPrivilege) {
   if (sdk) sdk(ctx, base);
   if (ctx.r3.u32 == 0 && result && (user_index == 0 || user_index == 0xFF) &&
       reach::LiveSignin()) {
-    std::memset(base + result, 0, 4);
+    std::memset(GuestPtr(base, result), 0, 4);
     base[result + 3] = 1;
   }
 }

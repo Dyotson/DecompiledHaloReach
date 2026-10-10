@@ -9,10 +9,13 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#include "../platform/guest_memory.h"
 #include "xecrypt_bignum.h"
 
 #include <cstdint>
 #include <cstring>
+
+using reach::GuestPtr;
 
 using namespace reach::xecrypt;
 
@@ -24,7 +27,7 @@ extern "C" REX_FUNC(__imp__XeCryptBnQwNeRsaPubCrypt) {
   const uint32_t b_addr = ctx.r4.u32;
   const uint32_t rsa_addr = ctx.r5.u32;
 
-  const uint8_t* rsa = base + rsa_addr;
+  const uint8_t* rsa = GuestPtr(base, rsa_addr);
   uint32_t cqw;
   uint32_t exponent;
   std::memcpy(&cqw, rsa, 4);
@@ -41,7 +44,7 @@ extern "C" REX_FUNC(__imp__XeCryptBnQwNeRsaPubCrypt) {
 
   BigNum n(cqw), a(cqw);
   const uint8_t* mod_ptr = rsa + 16;
-  const uint8_t* a_ptr = base + a_addr;
+  const uint8_t* a_ptr = GuestPtr(base, a_addr);
   for (uint32_t i = 0; i < cqw; ++i) {
     n[i] = LoadBE64(mod_ptr + i * 8);
     a[i] = LoadBE64(a_ptr + i * 8);
@@ -55,7 +58,7 @@ extern "C" REX_FUNC(__imp__XeCryptBnQwNeRsaPubCrypt) {
   }
 
   BigNum out = PowMod(a, exponent, n);
-  uint8_t* b_ptr = base + b_addr;
+  uint8_t* b_ptr = GuestPtr(base, b_addr);
   for (uint32_t i = 0; i < cqw; ++i) {
     StoreBE64(b_ptr + i * 8, out[i]);
   }

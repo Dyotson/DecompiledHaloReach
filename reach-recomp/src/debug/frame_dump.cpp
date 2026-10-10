@@ -27,6 +27,7 @@
 // can be caught by hand while watching periodic frame dumps; load times vary
 // too much between runs for fixed times to land on the same shot.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 
 #include <rex/logging.h>
@@ -57,6 +58,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -108,7 +111,7 @@ Schedule& GetSchedule() {
 
 void DumpFrontBuffer(uint8_t* base, uint32_t fetch_addr, double seconds, const std::string& dir) {
   // Texture fetch constant (6 big-endian dwords).
-  const uint8_t* fetch = base + fetch_addr;
+  const uint8_t* fetch = GuestPtr(base, fetch_addr);
   uint32_t dw0 = LoadBE32(fetch), dw1 = LoadBE32(fetch + 4), dw2 = LoadBE32(fetch + 8);
   uint32_t address = dw1 & 0xFFFFF000u;
   uint32_t format = dw1 & 0x3F;
@@ -128,7 +131,7 @@ void DumpFrontBuffer(uint8_t* base, uint32_t fetch_addr, double seconds, const s
   // mirror sits 4 KiB higher in physical memory than the 0xA0000000 one, so
   // reading the masked address via 0xA0000000 shifts the image by one tile.
   const uint8_t* src =
-      address >= kPhysicalMirror ? base + address : base + kPhysicalMirror + address;
+      address >= kPhysicalMirror ? GuestPtr(base, address) : GuestPtr(base, kPhysicalMirror + address);
   if (FILE* f = std::fopen((stem + ".bin").c_str(), "wb")) {
     std::fwrite(src, 1, bytes, f);
     std::fclose(f);

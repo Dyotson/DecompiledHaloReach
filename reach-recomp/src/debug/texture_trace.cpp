@@ -8,6 +8,8 @@
 // with an invalid header, and each distinct caller binding NULL, then forwards
 // to the recompiled function.
 
+#include "../platform/guest_memory.h"
+
 #include <fmt/format.h>
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -24,6 +26,8 @@
 #include <set>
 #include <tuple>
 #include <utility>
+
+using reach::GuestPtr;
 
 REX_EXTERN(__imp__sub_8216B0C8);
 
@@ -57,7 +61,7 @@ extern "C" REX_FUNC(sub_8216B0C8) {
   }
   if (Enabled() && ctx.r5.u32 != 0) {
     const uint32_t tex = ctx.r5.u32;
-    const uint8_t* fetch = base + tex + 0x1C;
+    const uint8_t* fetch = GuestPtr(base, tex + 0x1C);
     uint32_t dw[6];
     for (int i = 0; i < 6; ++i) dw[i] = LoadBE32(fetch + i * 4);
     if ((dw[0] & 3) == 2 && std::getenv("REACH_TEXTRACE_VALID")) {
@@ -82,7 +86,7 @@ extern "C" REX_FUNC(sub_8216B0C8) {
             "REACH_TEXTRACE: SetTexture stage={} tex={:#010x} caller={:#010x} "
             "fetch={:08X} {:08X} {:08X} {:08X} {:08X} {:08X} common={:08X}",
             ctx.r4.u32, tex, static_cast<uint32_t>(ctx.lr), dw[0], dw[1], dw[2], dw[3], dw[4],
-            dw[5], LoadBE32(base + tex));
+            dw[5], LoadBE32(GuestPtr(base, tex)));
       }
     }
   }
@@ -130,15 +134,15 @@ bool PlausibleGuestPointer(uint32_t addr) { return addr >= 0x40000000u; }
 
 extern "C" REX_FUNC(sub_8216AD90) {
   if (Enabled() && PlausibleGuestPointer(ctx.r4.u32)) {
-    RecordHandle(static_cast<uint32_t>(ctx.lr), LoadBE32(base + ctx.r4.u32));
+    RecordHandle(static_cast<uint32_t>(ctx.lr), LoadBE32(GuestPtr(base, ctx.r4.u32)));
   }
   if (Enabled() && PlausibleGuestPointer(ctx.r4.u32)) {
     const uint32_t stage = ctx.r3.u32;
-    const uint32_t handle = LoadBE32(base + ctx.r4.u32);
+    const uint32_t handle = LoadBE32(GuestPtr(base, ctx.r4.u32));
     if (stage < 26 && handle != 0 && handle != 0xFFFFFFFFu) {
-      const uint32_t cached = LoadBE32(base + 0x82A8F938u + stage * 4);
-      const uint32_t device = LoadBE32(base + 0x83150B30u);
-      const uint32_t bound = LoadBE32(base + device + (stage + 0xC6C) * 4);
+      const uint32_t cached = LoadBE32(GuestPtr(base, 0x82A8F938u + stage * 4));
+      const uint32_t device = LoadBE32(GuestPtr(base, 0x83150B30u));
+      const uint32_t bound = LoadBE32(GuestPtr(base, device + (stage + 0xC6C) * 4));
       if (cached == handle && bound == 0) {
         static std::mutex mutex;
         static std::set<std::pair<uint32_t, uint32_t>> seen;
@@ -185,10 +189,10 @@ extern "C" REX_FUNC(sub_821BB700) {
     // Histogram of the variant the composite will pick (same logic as the guest).
     static std::map<int, uint64_t> variants;
     static auto last_hist = std::chrono::steady_clock::now();
-    const uint32_t v = LoadBE32(base + 0x83150D58u);
+    const uint32_t v = LoadBE32(GuestPtr(base, 0x83150D58u));
     int variant = 0;
     if (base[0x8315110Cu] == 0) {
-      const uint8_t* st = base + v + 0x3A8;
+      const uint8_t* st = GuestPtr(base, v + 0x3A8);
       if (st[0x98]) variant = st[0x9A] ? 5 : 1;
       else if (st[0x9B]) variant = 0x0B;
     }
@@ -198,7 +202,7 @@ extern "C" REX_FUNC(sub_821BB700) {
       std::string h;
       for (auto& [k, n] : variants) h += fmt::format(" v{}={}", k, n);
       REXLOG_WARN("REACH_TEXTRACE: composite variants:{} (blur amount s+0xAC={})", h,
-                  std::bit_cast<float>(LoadBE32(base + v + 0x3A8 + 0xAC)));
+                  std::bit_cast<float>(LoadBE32(GuestPtr(base, v + 0x3A8 + 0xAC))));
     }
   }
   if (Enabled()) {
@@ -206,7 +210,7 @@ extern "C" REX_FUNC(sub_821BB700) {
     auto now = std::chrono::steady_clock::now();
     if (now - last > std::chrono::seconds(3)) {
       last = now;
-      const uint32_t view = LoadBE32(base + 0x83150D58u);
+      const uint32_t view = LoadBE32(GuestPtr(base, 0x83150D58u));
       const uint8_t gate = base[0x8315110Cu];
       const uint32_t s = view + 0x3A8;
       REXLOG_WARN(

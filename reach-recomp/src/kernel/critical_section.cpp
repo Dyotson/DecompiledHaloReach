@@ -15,19 +15,23 @@
 // a contended waiter blocks on a host semaphore keyed by the critical section's address,
 // which no guest memory can alias. REACH_SDK_CRITICAL_SECTIONS=1 restores the SDK's.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 
+#include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/xthread.h>
 
-
+#include <chrono>
 #include <condition_variable>
 #include <cstdint>
 #include <cstdlib>
 #include <memory>
 #include <mutex>
 #include <unordered_map>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -94,7 +98,7 @@ constexpr uint32_t kLockCount = 0x10, kRecursion = 0x14, kOwner = 0x18;
 uint32_t CurrentThread() { return rex::system::XThread::GetCurrentThread()->guest_object(); }
 
 void Enter(uint8_t* base, uint32_t cs) {
-  uint8_t* p = base + cs;
+  uint8_t* p = GuestPtr(base, cs);
   const uint32_t self = CurrentThread();
   if (Load32(p + kOwner) == self) {
     AtomicAdd(p + kLockCount, 1);
@@ -111,7 +115,13 @@ void Enter(uint8_t* base, uint32_t cs) {
   if (AtomicAdd(p + kLockCount, 1) != 0) {
     Waiters& w = WaitersOf(cs);
     std::unique_lock<std::mutex> lock(w.mutex);
-    w.cv.wait(lock, [&w] { return w.permits > 0; });
+    // A wait this long is a deadlock or a lost hand-off; say whose lock it is.
+    while (!w.cv.wait_for(lock, std::chrono::seconds(10), [&w] { return w.permits > 0; })) {
+      REXLOG_WARN("RtlEnterCriticalSection({:08X}): thread {:08X} waiting 10 s; lock count {}, "
+                  "owner {:08X}, recursion {}",
+                  cs, self, int32_t(Load32(p + kLockCount)), Load32(p + kOwner),
+                  Load32(p + kRecursion));
+    }
     --w.permits;
   }
   Store32(p + kOwner, self);
@@ -119,7 +129,7 @@ void Enter(uint8_t* base, uint32_t cs) {
 }
 
 void Leave(uint8_t* base, uint32_t cs) {
-  uint8_t* p = base + cs;
+  uint8_t* p = GuestPtr(base, cs);
   const int32_t recursion = int32_t(Load32(p + kRecursion)) - 1;
   Store32(p + kRecursion, uint32_t(recursion > 0 ? recursion : 0));
   if (recursion > 0) {
@@ -138,7 +148,7 @@ void Leave(uint8_t* base, uint32_t cs) {
 }
 
 uint32_t TryEnter(uint8_t* base, uint32_t cs) {
-  uint8_t* p = base + cs;
+  uint8_t* p = GuestPtr(base, cs);
   const uint32_t self = CurrentThread();
   if (AtomicSwap(p + kLockCount, -1, 0)) {
     Store32(p + kOwner, self);

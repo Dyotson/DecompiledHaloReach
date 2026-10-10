@@ -19,6 +19,7 @@
 // ("Space", "LMB", "WheelUp"; 0.3 s by default), "MOUSE:dx,dy" moves the mouse by that many
 // counts.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 #include "../input/kbm.h"
 
@@ -40,6 +41,8 @@
 #include <string>
 #include <thread>
 #include <vector>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -234,7 +237,7 @@ extern "C" REX_FUNC(__imp__XamInputGetState) {
       if (p.triggers[i]) triggers[i] = p.triggers[i];
     }
   }
-  uint8_t* state = base + state_addr;
+  uint8_t* state = GuestPtr(base, state_addr);
   if (ctx.r3.u32 != kErrorSuccess) {
     // No physical pad: present a connected, centred one, also between presses
     // (a disconnected pad pauses gameplay).

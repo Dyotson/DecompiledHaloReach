@@ -9,6 +9,7 @@
 // string as it is. Without --headless every call goes to the SDK, whose ImGui
 // keyboard converts correctly.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 
 #include <rex/ppc/context.h>
@@ -19,6 +20,8 @@
 #include <cstdint>
 #include <cstring>
 #include <functional>
+
+using reach::GuestPtr;
 
 namespace rex::kernel::xam {
 // Exported by librexruntime but not declared in a public header.
@@ -52,11 +55,11 @@ extern "C" REX_FUNC(__imp__XamShowKeyboardUI) {
     return;
   }
   auto run = [base, default_text, buffer, buffer_length]() -> uint32_t {
-    auto* dest = reinterpret_cast<uint16_t*>(base + buffer);
+    auto* dest = reinterpret_cast<uint16_t*>(GuestPtr(base, buffer));
     std::memset(dest, 0, size_t(buffer_length) * 2);
     if (default_text) {
       // Both strings are big-endian guest memory; a NUL is zero either way.
-      const auto* src = reinterpret_cast<const uint16_t*>(base + default_text);
+      const auto* src = reinterpret_cast<const uint16_t*>(GuestPtr(base, default_text));
       for (uint32_t i = 0; i + 1 < buffer_length && src[i]; ++i) dest[i] = src[i];
     }
     return 0;  // X_ERROR_SUCCESS

@@ -10,6 +10,7 @@
 // cinematics, dead players and paused games get no mouse motion.
 
 #include "../input/kbm.h"
+#include "../platform/guest_memory.h"
 
 #include <rex/ppc/context.h>
 #include <rex/system/kernel_state.h>
@@ -17,6 +18,8 @@
 
 #include <cstdint>
 #include <cstring>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -79,7 +82,7 @@ void ReachMouseLookApply(PPCRegister& r15, PPCRegister& r27) {
   bool inverted = base[kLookInverted + ctrl * kSettingsStride] != 0;
   if (g_look[ctrl].flying && base[kFlightInverted + ctrl * kSettingsStride]) inverted = !inverted;
   if (inverted) pitch = -pitch;
-  uint8_t* out = base + r27.u32;
+  uint8_t* out = GuestPtr(base, r27.u32);
   StoreFloat(out + 0x14, LoadFloat(out + 0x14) + yaw * g_look[ctrl].zoom);
   StoreFloat(out + 0x18, LoadFloat(out + 0x18) + pitch * g_look[ctrl].zoom);
 }

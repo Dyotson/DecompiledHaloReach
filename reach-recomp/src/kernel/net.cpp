@@ -35,6 +35,7 @@
 // registers r3-r8 and the result; busy calls are logged for their first 20
 // calls and then every 1000th.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 #include "identity.h"
 #include "live.h"
@@ -62,6 +63,8 @@
 #include <thread>
 #include <unordered_map>
 #include <vector>
+
+using reach::GuestPtr;
 
 namespace {
 
@@ -123,9 +126,9 @@ std::string GuestBacktrace(const PPCContext& ctx, const uint8_t* base, int depth
   std::string out;
   uint32_t frame = ctx.r1.u32;
   for (int i = 0; i < depth && frame; ++i) {
-    uint32_t parent = Load32(base + frame);
+    uint32_t parent = Load32(GuestPtr(base, frame));
     if (parent <= frame || parent - frame > 0x10000 || (parent & 7)) break;
-    uint32_t lr = Load32(base + parent - 8);
+    uint32_t lr = Load32(GuestPtr(base, parent - 8));
     if (lr < 0x82000000 || lr >= 0x84000000) break;
     char buf[16];
     std::snprintf(buf, sizeof(buf), " %08X", lr);
@@ -1118,7 +1121,7 @@ REACH_NET_FUNC(NetDll_XNetGetEthernetLinkStatus, NetOn(), {
 
 // DWORD XNetGetTitleXnAddr(XNADDR* pxna)
 REACH_NET_FUNC(NetDll_XNetGetTitleXnAddr, NetOn() && VNet::Get().Ready(), {
-  if (ctx.r4.u32) VNet::Get().WriteSelfXnAddr(base + ctx.r4.u32);
+  if (ctx.r4.u32) VNet::Get().WriteSelfXnAddr(GuestPtr(base, ctx.r4.u32));
   // XNET_GET_XNADDR_STATIC | XNET_GET_XNADDR_ETHERNET, plus XNET_GET_XNADDR_ONLINE
   // when signed in to Live.
   ctx.r3.u64 = reach::LiveSignin() ? 0x86 : 0x06;
@@ -1126,7 +1129,7 @@ REACH_NET_FUNC(NetDll_XNetGetTitleXnAddr, NetOn() && VNet::Get().Ready(), {
 
 // INT XNetXnAddrToInAddr(const XNADDR* pxna, const XNKID* pxnkid, IN_ADDR* pina)
 REACH_NET_FUNC(NetDll_XNetXnAddrToInAddr, NetOn() && VNet::Get().Ready(), {
-  Store32(base + ctx.r6.u32, VNet::Get().VipOfXnAddr(base + ctx.r4.u32));
+  Store32(GuestPtr(base, ctx.r6.u32), VNet::Get().VipOfXnAddr(GuestPtr(base, ctx.r4.u32)));
   ctx.r3.u64 = 0;
 })
 
@@ -1134,7 +1137,7 @@ REACH_NET_FUNC(NetDll_XNetXnAddrToInAddr, NetOn() && VNet::Get().Ready(), {
 REACH_NET_FUNC(NetDll_XNetInAddrToXnAddr, NetOn() && VNet::Get().Ready(), {
   uint8_t xna[36];
   if (VNet::Get().XnAddrOfVip(ctx.r4.u32, xna)) {
-    if (ctx.r5.u32) std::memcpy(base + ctx.r5.u32, xna, sizeof(xna));
+    if (ctx.r5.u32) std::memcpy(GuestPtr(base, ctx.r5.u32), xna, sizeof(xna));
     ctx.r3.u64 = 0;
   } else {
     ctx.r3.u64 = kWsaEInval;
@@ -1144,7 +1147,7 @@ REACH_NET_FUNC(NetDll_XNetInAddrToXnAddr, NetOn() && VNet::Get().Ready(), {
 // INT XNetCreateKey(XNKID* pxnkid, XNKEY* pxnkey)
 REACH_NET_FUNC(NetDll_XNetCreateKey, NetOn(), {
   static std::mt19937_64 rng(std::random_device{}());
-  uint8_t* kid = base + ctx.r4.u32;
+  uint8_t* kid = GuestPtr(base, ctx.r4.u32);
   for (int i = 0; i < 8; ++i) kid[i] = uint8_t(rng());
   kid[0] &= 0x0F;  // XNET_XNKID_SYSTEM_LINK
   if (ctx.r5.u32) {
@@ -1185,9 +1188,9 @@ uint64_t MachineIdOf(const uint8_t* xna) {
 
 // INT XNetXnAddrToMachineId(const XNADDR* pxnaddr, ULONGLONG* pqwMachineId)
 REACH_NET_FUNC(NetDll_XNetXnAddrToMachineId, NetOn(), {
-  const uint64_t id = MachineIdOf(base + ctx.r4.u32);
-  Store32(base + ctx.r5.u32, uint32_t(id >> 32));
-  Store32(base + ctx.r5.u32 + 4, uint32_t(id));
+  const uint64_t id = MachineIdOf(GuestPtr(base, ctx.r4.u32));
+  Store32(GuestPtr(base, ctx.r5.u32), uint32_t(id >> 32));
+  Store32(GuestPtr(base, ctx.r5.u32 + 4), uint32_t(id));
   ctx.r3.u64 = 0;
 })
 
@@ -1207,7 +1210,7 @@ REACH_NET_FUNC(NetDll_XNetRandom, NetOn(), {
 // INT XNetServerToInAddr(IN_ADDR ina, DWORD dwServiceId, IN_ADDR* pina): title server
 // addresses (from the title server enumeration) are plain IPs here.
 REACH_NET_FUNC(NetDll_XNetServerToInAddr, reach::LiveSignin() && ctx.r6.u32, {
-  Store32(base + ctx.r6.u32, ctx.r4.u32);
+  Store32(GuestPtr(base, ctx.r6.u32), ctx.r4.u32);
   ctx.r3.u64 = 0;
 })
 REACH_NET_TRACE(NetDll_XNetQosServiceLookup)
@@ -1231,7 +1234,7 @@ REACH_NET_FUNC(NetDll_socket, NetOn() && ((ctx.r5.u32 == 2 && VNet::Get().Ready(
 
 // int bind(SOCKET s, const sockaddr* name, int namelen)
 REACH_NET_FUNC(NetDll_bind, Ours(ctx.r4.u32), {
-  uint32_t error = VNet::Get().Bind(ctx.r4.u32, Load16(base + ctx.r5.u32 + 2));
+  uint32_t error = VNet::Get().Bind(ctx.r4.u32, Load16(GuestPtr(base, ctx.r5.u32 + 2)));
   if (error) SetError(error);
   ctx.r3.u64 = error ? uint64_t(-1) : 0;
 })
@@ -1245,7 +1248,7 @@ extern "C" REX_FUNC(__imp__NetDll_connect) {
   static std::atomic<uint64_t> calls{0};
   const uint32_t in[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
   const uint32_t lr = uint32_t(ctx.lr);
-  uint8_t* a = base + ctx.r5.u32;
+  uint8_t* a = GuestPtr(base, ctx.r5.u32);
   if (Tcp(ctx.r4.u32)) {
     ctx.r3.u64 = TcpResult(reach::tcp::Connect(ctx.r4.u32, Load32(a + 4), Load16(a + 2)));
     Log("NetDll_connect", calls, in, ctx.r3.u32, " (TCP)", lr);
@@ -1291,7 +1294,7 @@ REACH_NET_FUNC(NetDll_shutdown, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
 // int ioctlsocket(SOCKET s, long cmd, u_long* argp)
 REACH_NET_FUNC(NetDll_ioctlsocket, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
   const uint32_t cmd = ctx.r5.u32;
-  uint8_t* arg = base + ctx.r6.u32;
+  uint8_t* arg = GuestPtr(base, ctx.r6.u32);
   if (Tcp(ctx.r4.u32)) {
     ctx.r3.u64 = TcpResult(reach::tcp::Ioctl(ctx.r4.u32, cmd, arg));
   } else if (cmd == 0x8004667E) {  // FIONBIO
@@ -1311,12 +1314,12 @@ REACH_NET_FUNC(NetDll_sendto, Ours(ctx.r4.u32), {
   uint32_t vip = 0;
   uint16_t port = 0;
   if (ctx.r8.u32) {
-    vip = Load32(base + ctx.r8.u32 + 4);
-    port = Load16(base + ctx.r8.u32 + 2);
+    vip = Load32(GuestPtr(base, ctx.r8.u32 + 4));
+    port = Load16(GuestPtr(base, ctx.r8.u32 + 2));
   } else {
     VNet::Get().Connected(ctx.r4.u32, vip, port);
   }
-  uint32_t error = VNet::Get().SendTo(ctx.r4.u32, vip, port, base + ctx.r5.u32, ctx.r6.u32);
+  uint32_t error = VNet::Get().SendTo(ctx.r4.u32, vip, port, GuestPtr(base, ctx.r5.u32), ctx.r6.u32);
   if (error) SetError(error);
   ctx.r3.u64 = error ? uint64_t(-1) : ctx.r6.u32;
 })
@@ -1324,13 +1327,13 @@ REACH_NET_FUNC(NetDll_sendto, Ours(ctx.r4.u32), {
 // int send(SOCKET s, const char* buf, int len, int flags)
 REACH_NET_FUNC(NetDll_send, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
   if (Tcp(ctx.r4.u32)) {
-    ctx.r3.u64 = TcpResult(reach::tcp::Send(ctx.r4.u32, base + ctx.r5.u32, ctx.r6.u32));
+    ctx.r3.u64 = TcpResult(reach::tcp::Send(ctx.r4.u32, GuestPtr(base, ctx.r5.u32), ctx.r6.u32));
     return;
   }
   uint32_t vip = 0;
   uint16_t port = 0;
   VNet::Get().Connected(ctx.r4.u32, vip, port);
-  uint32_t error = VNet::Get().SendTo(ctx.r4.u32, vip, port, base + ctx.r5.u32, ctx.r6.u32);
+  uint32_t error = VNet::Get().SendTo(ctx.r4.u32, vip, port, GuestPtr(base, ctx.r5.u32), ctx.r6.u32);
   if (error) SetError(error);
   ctx.r3.u64 = error ? uint64_t(-1) : ctx.r6.u32;
 })
@@ -1345,14 +1348,14 @@ uint64_t Receive(PPCContext& ctx, uint8_t* base, uint32_t from, uint32_t from_le
     return uint64_t(-1);
   }
   size_t n = std::min<size_t>(d.data.size(), ctx.r6.u32);
-  std::memcpy(base + ctx.r5.u32, d.data.data(), n);
+  std::memcpy(GuestPtr(base, ctx.r5.u32), d.data.data(), n);
   if (from) {
-    uint8_t* a = base + from;
+    uint8_t* a = GuestPtr(base, from);
     std::memset(a, 0, 16);
     Store16(a, 2);  // AF_INET
     Store16(a + 2, d.port);
     Store32(a + 4, d.vip);
-    if (from_len) Store32(base + from_len, 16);
+    if (from_len) Store32(GuestPtr(base, from_len), 16);
   }
   if (n < d.data.size()) {
     SetError(kWsaEMsgSize);
@@ -1370,7 +1373,7 @@ REACH_NET_FUNC(NetDll_recvfrom, Ours(ctx.r4.u32), {
 // int recv(SOCKET s, char* buf, int len, int flags)
 REACH_NET_FUNC(NetDll_recv, Ours(ctx.r4.u32) || Tcp(ctx.r4.u32), {
   ctx.r3.u64 = Tcp(ctx.r4.u32)
-                   ? TcpResult(reach::tcp::Recv(ctx.r4.u32, base + ctx.r5.u32, ctx.r6.u32))
+                   ? TcpResult(reach::tcp::Recv(ctx.r4.u32, GuestPtr(base, ctx.r5.u32), ctx.r6.u32))
                    : Receive(ctx, base, 0, 0);
 })
 
@@ -1379,15 +1382,15 @@ namespace {
 std::vector<uint32_t> ReadSet(uint8_t* base, uint32_t set) {
   std::vector<uint32_t> handles;
   if (!set) return handles;
-  uint32_t count = std::min<uint32_t>(Load32(base + set), 64);
-  for (uint32_t i = 0; i < count; ++i) handles.push_back(Load32(base + set + 4 + 4 * i));
+  uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, set)), 64);
+  for (uint32_t i = 0; i < count; ++i) handles.push_back(Load32(GuestPtr(base, set + 4 + 4 * i)));
   return handles;
 }
 
 void WriteSet(uint8_t* base, uint32_t set, const std::vector<uint32_t>& handles) {
   if (!set) return;
-  Store32(base + set, uint32_t(handles.size()));
-  for (size_t i = 0; i < handles.size(); ++i) Store32(base + set + 4 + 4 * i, handles[i]);
+  Store32(GuestPtr(base, set), uint32_t(handles.size()));
+  for (size_t i = 0; i < handles.size(); ++i) Store32(GuestPtr(base, set + 4 + 4 * i), handles[i]);
 }
 
 bool AllOurs(uint8_t* base, uint32_t set) {
@@ -1413,8 +1416,8 @@ REACH_NET_FUNC(NetDll_select,
                  }
                  int64_t timeout_us = -1;
                  if (ctx.r8.u32) {
-                   timeout_us = int64_t(int32_t(Load32(base + ctx.r8.u32))) * 1000000 +
-                                int32_t(Load32(base + ctx.r8.u32 + 4));
+                   timeout_us = int64_t(int32_t(Load32(GuestPtr(base, ctx.r8.u32)))) * 1000000 +
+                                int32_t(Load32(GuestPtr(base, ctx.r8.u32 + 4)));
                  }
                  std::vector<uint32_t> writable = ReadSet(base, ctx.r6.u32);  // always writable
                  if (!writable.empty()) timeout_us = 0;

@@ -7,6 +7,8 @@
 // helper and the load paths that lead to it are logged with their callers and
 // results, then forwarded to the recompiled functions.
 
+#include "../platform/guest_memory.h"
+
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
@@ -15,6 +17,8 @@
 #include <cstdlib>
 #include <cstring>
 #include <string>
+
+using reach::GuestPtr;
 
 REX_EXTERN(__imp__sub_82429300);  // game_state verify(buffer, allow_unset)
 REX_EXTERN(__imp__sub_8242E968);  // keyed SHA-1 of (data, size, mode, expected, out)
@@ -64,10 +68,10 @@ constexpr uint32_t kHashOffset = 0x1E708;
 extern "C" REX_FUNC(sub_82429300) {
   if (!Enabled()) return __imp__sub_82429300(ctx, base);
   const uint32_t buffer = ctx.r3.u32, flag = ctx.r4.u32, lr = static_cast<uint32_t>(ctx.lr);
-  const uint32_t live = LoadBE32(base + kLiveStatePtr);
-  const uint32_t header = LoadBE32(base + kHeaderStatePtr);
+  const uint32_t live = LoadBE32(GuestPtr(base, kLiveStatePtr));
+  const uint32_t header = LoadBE32(GuestPtr(base, kHeaderStatePtr));
   const uint32_t hash_at = (buffer ? buffer : header) + kHashOffset;
-  const std::string stored = Hex(base + hash_at, 20);
+  const std::string stored = Hex(GuestPtr(base, hash_at), 20);
   __imp__sub_82429300(ctx, base);
   REXLOG_INFO("GSTRACE verify(buffer={:#x}, flag={}) lr={:#x} live={:#x} header={:#x} stored={} -> {}",
               buffer, flag, lr, live, header, stored, ctx.r3.u32 & 0xFF);
@@ -77,10 +81,10 @@ extern "C" REX_FUNC(sub_8242E968) {
   if (!Enabled()) return __imp__sub_8242E968(ctx, base);
   const uint32_t data = ctx.r3.u32, size = ctx.r4.u32, mode = ctx.r5.u32;
   const uint32_t expected = ctx.r6.u32, out = ctx.r7.u32, lr = static_cast<uint32_t>(ctx.lr);
-  const std::string want = expected ? Hex(base + expected, 20) : "-";
+  const std::string want = expected ? Hex(GuestPtr(base, expected), 20) : "-";
   __imp__sub_8242E968(ctx, base);
   REXLOG_INFO("GSTRACE sha(data={:#x}, size={:#x}, mode={}) lr={:#x} expected={} computed={} -> {}",
-              data, size, mode, lr, want, out ? Hex(base + out, 20) : "-", ctx.r3.u32 & 0xFF);
+              data, size, mode, lr, want, out ? Hex(GuestPtr(base, out), 20) : "-", ctx.r3.u32 & 0xFF);
 }
 
 #define REACH_GSTRACE_PASSTHROUGH(addr, what)                                               \
@@ -109,7 +113,7 @@ extern "C" REX_FUNC(sub_826F5660) {
   if (Enabled()) {
     auto str = [&](uint32_t addr) {
       if (addr < 0x80000000u || addr >= 0x90000000u) return std::string("?");
-      return std::string(reinterpret_cast<const char*>(base + addr), 0, 200);
+      return std::string(reinterpret_cast<const char*>(GuestPtr(base, addr)), 0, 200);
     };
     REXLOG_ERROR("GSTRACE fatal_error lr={:#x} format=\"{}\" arg=\"{}\"",
                  static_cast<uint32_t>(ctx.lr), str(ctx.r3.u32), str(ctx.r4.u32));

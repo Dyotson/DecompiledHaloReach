@@ -10,6 +10,7 @@
 // (sub_82200A00) skipped pending joins, so System Link joins never started.
 // Synchronous calls (no XOVERLAPPED) go to the SDK unchanged.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 
 #include <rex/ppc/context.h>
@@ -20,6 +21,8 @@
 
 
 #include <cstdint>
+
+using reach::GuestPtr;
 
 namespace {
 using GuestFunc = void (*)(PPCContext&, uint8_t*);
@@ -46,7 +49,7 @@ extern "C" REX_FUNC(__imp__XamEnumerate) {
   }
   auto run = [enumerator, buffer, base](uint32_t& extended_error, uint32_t& length) -> X_RESULT {
     uint32_t item_count = 0;
-    X_RESULT result = buffer ? enumerator->WriteItems(buffer, base + buffer, &item_count)
+    X_RESULT result = buffer ? enumerator->WriteItems(buffer, GuestPtr(base, buffer), &item_count)
                              : X_RESULT(X_ERROR_INVALID_PARAMETER);
     extended_error = X_HRESULT_FROM_WIN32(result);
     length = item_count;

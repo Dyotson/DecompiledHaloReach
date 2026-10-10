@@ -29,6 +29,7 @@
 // did before) and what we answered. Message layouts follow the Xenia netplay fork
 // (AdrianCassar/xenia-canary, BSD), see docs/online_plan.md.
 
+#include "../platform/guest_memory.h"
 #include "../platform/sdk_import.h"
 #include "identity.h"
 #include "live.h"
@@ -56,6 +57,8 @@
 #include <string>
 #include <unordered_map>
 #include <vector>
+
+using reach::GuestPtr;
 
 REXCVAR_DEFINE_BOOL(live_accept_invites, true, "Network/Reach Live",
                     "Accept game invites from other players at once (there is no Xbox Guide "
@@ -125,7 +128,7 @@ uint64_t FileTimeNow() {
 // The value of argument `index` of an X_ARGUMENT_LIST-style block: 16-byte entries
 // {native size u32, pad, value pointer u64}.
 uint32_t ArgPointer(const uint8_t* base, uint32_t args, int index) {
-  return Load32(base + args + 16 * index + 12);
+  return Load32(GuestPtr(base, args + 16 * index + 12));
 }
 
 // The presence our player shows when not hosting a joinable session.
@@ -141,17 +144,17 @@ void SetIdlePresence() {
 // results pointer u32} followed by one HRESULT per string.
 uint32_t XStringVerify(uint8_t* base, uint32_t message) {
   if (!message) return kInvalidArg;
-  const uint32_t task = Load32(base + message);
+  const uint32_t task = Load32(GuestPtr(base, message));
   if (!task) return kInvalidArg;
-  const uint32_t request = Load32(base + task + 0x18), request_size = Load32(base + task + 0x1C);
-  const uint32_t results = Load32(base + task + 0x2C), results_size = Load32(base + task + 0x30);
+  const uint32_t request = Load32(GuestPtr(base, task + 0x18)), request_size = Load32(GuestPtr(base, task + 0x1C));
+  const uint32_t results = Load32(GuestPtr(base, task + 0x2C)), results_size = Load32(GuestPtr(base, task + 0x30));
   if (!request || request_size < 12 || !results || results_size < 6) return kInvalidArg;
   uint32_t count = base[request + 10] | base[request + 11] << 8;
   count = std::min<uint32_t>(count, (results_size - 6) / 4);
-  std::memset(base + results, 0, results_size);
+  std::memset(GuestPtr(base, results), 0, results_size);
   base[results] = uint8_t(count >> 8);
   base[results + 1] = uint8_t(count);
-  Store32(base + results + 2, results + 6);  // all results stay S_OK
+  Store32(GuestPtr(base, results + 2), results + 6);  // all results stay S_OK
   return kSuccess;
 }
 
@@ -164,11 +167,11 @@ uint32_t XFriendsCreateEnumerator(uint8_t* base, uint32_t args) {
   const uint32_t first_ptr = ArgPointer(base, args, 1), count_ptr = ArgPointer(base, args, 2);
   const uint32_t size_out = ArgPointer(base, args, 3), handle_out = ArgPointer(base, args, 4);
   if (!handle_out || !size_out || !count_ptr) return kInvalidArg;
-  Store32(base + handle_out, 0);
-  const uint32_t first = first_ptr ? Load32(base + first_ptr) : 0;
-  const uint32_t count = std::min<uint32_t>(Load32(base + count_ptr), 100);
+  Store32(GuestPtr(base, handle_out), 0);
+  const uint32_t first = first_ptr ? Load32(GuestPtr(base, first_ptr)) : 0;
+  const uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, count_ptr)), 100);
   if (!count) return kInvalidArg;
-  Store32(base + size_out, count * kFriendSize);
+  Store32(GuestPtr(base, size_out), count * kFriendSize);
 
   auto e = make_object<XStaticUntypedEnumerator>(REX_KERNEL_STATE(), count, kFriendSize);
   if (XFAILED(e->Initialize(0xFFFFFFFF, kAppXLiveBase, 0x58021, 0x58022, 0))) return kInvalidArg;
@@ -191,7 +194,7 @@ uint32_t XFriendsCreateEnumerator(uint8_t* base, uint32_t args) {
   if (Trace()) {
     REXLOG_INFO("REACH_LIVE: friends list: {} of {} players", e->item_count(), roster.size());
   }
-  Store32(base + handle_out, e->handle());
+  Store32(GuestPtr(base, handle_out), e->handle());
   return kSuccess;
 }
 
@@ -221,17 +224,17 @@ uint32_t XPresenceCreateEnumerator(uint8_t* base, uint32_t args) {
   const uint32_t first_ptr = ArgPointer(base, args, 3);
   const uint32_t size_out = ArgPointer(base, args, 5), handle_out = ArgPointer(base, args, 6);
   if (!handle_out || !size_out || !count_ptr || !xuids) return kInvalidArg;
-  Store32(base + handle_out, 0);
-  const uint32_t count = std::min<uint32_t>(Load32(base + count_ptr), 100);
-  const uint32_t first = first_ptr ? Load32(base + first_ptr) : 0;
+  Store32(GuestPtr(base, handle_out), 0);
+  const uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, count_ptr)), 100);
+  const uint32_t first = first_ptr ? Load32(GuestPtr(base, first_ptr)) : 0;
   if (!count) return kInvalidArg;
-  Store32(base + size_out, count * kPresenceSize);
+  Store32(GuestPtr(base, size_out), count * kPresenceSize);
   auto e = make_object<XStaticUntypedEnumerator>(REX_KERNEL_STATE(), count, kPresenceSize);
   if (XFAILED(e->Initialize(0, kAppXLiveBase, 0x5801A, 0x5801B, 0))) return kInvalidArg;
   const auto roster = reach::LiveRoster();
   for (uint32_t i = first; i < count; ++i) {
     const uint64_t xuid =
-        uint64_t(Load32(base + xuids + 8 * i)) << 32 | Load32(base + xuids + 8 * i + 4);
+        uint64_t(Load32(GuestPtr(base, xuids + 8 * i))) << 32 | Load32(GuestPtr(base, xuids + 8 * i + 4));
     for (const auto& f : roster) {
       if (f.xuid == xuid) {
         WritePresence(e->AppendItem(), f);
@@ -242,7 +245,7 @@ uint32_t XPresenceCreateEnumerator(uint8_t* base, uint32_t args) {
   if (Trace()) {
     REXLOG_INFO("REACH_LIVE: presence of {} players: {} known", count, e->item_count());
   }
-  Store32(base + handle_out, e->handle());
+  Store32(GuestPtr(base, handle_out), e->handle());
   return kSuccess;
 }
 
@@ -305,25 +308,25 @@ void PublishPresenceLocked() {
 // XSESSION_INFO*, nonce*}: for a session we host, fill the info before the SDK
 // completes the request.
 void XSessionCreate(uint8_t* base, uint32_t buffer) {
-  const uint32_t object = Load32(base + buffer), flags = Load32(base + buffer + 4);
-  const uint32_t info_ptr = Load32(base + buffer + 20), nonce_ptr = Load32(base + buffer + 24);
+  const uint32_t object = Load32(GuestPtr(base, buffer)), flags = Load32(GuestPtr(base, buffer + 4));
+  const uint32_t info_ptr = Load32(GuestPtr(base, buffer + 20)), nonce_ptr = Load32(GuestPtr(base, buffer + 24));
   if (!info_ptr) return;
   if (!(flags & kSessionHost)) {  // joining someone's session: remember it for invites
     std::lock_guard<std::mutex> lock(sessions_mutex);
-    std::memcpy(joined_session, base + info_ptr, kSessionInfoSize);
+    std::memcpy(joined_session, GuestPtr(base, info_ptr), kSessionInfoSize);
     return;
   }
   HostedSession s{};
   s.flags = flags;
-  s.max_public = Load32(base + buffer + 8);
-  s.max_private = Load32(base + buffer + 12);
+  s.max_public = Load32(GuestPtr(base, buffer + 8));
+  s.max_private = Load32(GuestPtr(base, buffer + 12));
   Store64(s.info, RandomU64());
   s.info[0] = uint8_t((s.info[0] & 0x0F) | 0x80);  // XNET_XNKID_ONLINE_PEER
   reach::LiveSelfXnAddr(s.info + 8);
   Store64(s.info + 0x2C, RandomU64());
   Store64(s.info + 0x34, RandomU64());
-  std::memcpy(base + info_ptr, s.info, kSessionInfoSize);
-  if (nonce_ptr) Store64(base + nonce_ptr, RandomU64());
+  std::memcpy(GuestPtr(base, info_ptr), s.info, kSessionInfoSize);
+  if (nonce_ptr) Store64(GuestPtr(base, nonce_ptr), RandomU64());
   REXLOG_INFO("REACH_LIVE: hosting session {:016X} (flags {:08X}, {} public + {} private slots)",
               SessionId(s.info), flags, s.max_public, s.max_private);
   std::lock_guard<std::mutex> lock(sessions_mutex);
@@ -336,7 +339,7 @@ void XSessionCreate(uint8_t* base, uint32_t buffer) {
 // XSessionDelete {session object, ...}
 void XSessionDelete(uint8_t* base, uint32_t buffer) {
   std::lock_guard<std::mutex> lock(sessions_mutex);
-  auto it = hosted_sessions.find(Load32(base + buffer));
+  auto it = hosted_sessions.find(Load32(GuestPtr(base, buffer)));
   if (it == hosted_sessions.end()) return;
   qos_data.erase(SessionId(it->second.info));
   hosted_sessions.erase(it);
@@ -349,11 +352,11 @@ void XSessionDelete(uint8_t* base, uint32_t buffer) {
 void XSessionModify(uint8_t* base, uint32_t buffer) {
   constexpr uint32_t kModifiers = 0xF00;
   std::lock_guard<std::mutex> lock(sessions_mutex);
-  auto it = hosted_sessions.find(Load32(base + buffer));
+  auto it = hosted_sessions.find(Load32(GuestPtr(base, buffer)));
   if (it == hosted_sessions.end()) return;
-  it->second.flags = (it->second.flags & ~kModifiers) | (Load32(base + buffer + 4) & kModifiers);
-  it->second.max_public = Load32(base + buffer + 8);
-  it->second.max_private = Load32(base + buffer + 12);
+  it->second.flags = (it->second.flags & ~kModifiers) | (Load32(GuestPtr(base, buffer + 4)) & kModifiers);
+  it->second.max_public = Load32(GuestPtr(base, buffer + 8));
+  it->second.max_private = Load32(GuestPtr(base, buffer + 12));
   PublishPresenceLocked();
   PublishMatchLocked();
 }
@@ -361,13 +364,13 @@ void XSessionModify(uint8_t* base, uint32_t buffer) {
 // XSessionJoin{Local,Remote} (0xB0012) / Leave (0xB0013) {session object, user count,
 // XUIDs (null: local users), user indices, private-slot flags}: keeps the slot counts.
 void XSessionMembers(uint8_t* base, uint32_t buffer, bool join) {
-  const uint32_t count = Load32(base + buffer + 4), privates = Load32(base + buffer + 16);
+  const uint32_t count = Load32(GuestPtr(base, buffer + 4)), privates = Load32(GuestPtr(base, buffer + 16));
   std::lock_guard<std::mutex> lock(sessions_mutex);
-  auto it = hosted_sessions.find(Load32(base + buffer));
+  auto it = hosted_sessions.find(Load32(GuestPtr(base, buffer)));
   if (it == hosted_sessions.end()) return;
   HostedSession& s = it->second;
   for (uint32_t i = 0; i < count && i < 16; ++i) {
-    const bool is_private = join && privates && Load32(base + privates + 4 * i) != 0;
+    const bool is_private = join && privates && Load32(GuestPtr(base, privates + 4 * i)) != 0;
     uint32_t& filled = is_private ? s.filled_private : s.filled_public;
     if (join) {
       ++filled;
@@ -390,15 +393,15 @@ uint32_t XSessionSearch(uint8_t* base, const std::vector<uint64_t>& ids, uint32_
                         uint32_t results_size) {
   constexpr uint32_t kResultSize = 0x5C;
   if (!results || results_size < 8) return kInvalidArg;
-  std::memset(base + results, 0, results_size);
-  Store32(base + results + 4, results + 8);
+  std::memset(GuestPtr(base, results), 0, results_size);
+  Store32(GuestPtr(base, results + 4), results + 8);
   const auto roster = reach::LiveRoster();
   uint32_t found = 0;
   for (uint64_t id : ids) {
     for (const auto& f : roster) {
       if (!id || SessionId(f.session) != id) continue;
       if (8 + (found + 1) * kResultSize > results_size) break;
-      uint8_t* r = base + results + 8 + found * kResultSize;
+      uint8_t* r = GuestPtr(base, results + 8 + found * kResultSize);
       std::memcpy(r, f.session, kSessionInfoSize);
       if (f.extra.size() >= 4) {
         const uint32_t max_public = f.extra[0], max_private = f.extra[1];
@@ -412,24 +415,24 @@ uint32_t XSessionSearch(uint8_t* base, const std::vector<uint64_t>& ids, uint32_
       break;
     }
   }
-  Store32(base + results, found);
+  Store32(GuestPtr(base, results), found);
   if (Trace()) REXLOG_INFO("REACH_LIVE: session search: {} of {} found", found, ids.size());
   return kSuccess;
 }
 
 uint32_t XSessionSearchByIds(uint8_t* base, uint32_t buffer) {
-  const uint32_t count = std::min<uint32_t>(Load32(base + buffer + 4), 100);
-  const uint32_t ids_ptr = Load32(base + buffer + 8);
+  const uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, buffer + 4)), 100);
+  const uint32_t ids_ptr = Load32(GuestPtr(base, buffer + 8));
   std::vector<uint64_t> ids;
   for (uint32_t i = 0; i < count && ids_ptr; ++i) {
-    ids.push_back(uint64_t(Load32(base + ids_ptr + 8 * i)) << 32 | Load32(base + ids_ptr + 8 * i + 4));
+    ids.push_back(uint64_t(Load32(GuestPtr(base, ids_ptr + 8 * i))) << 32 | Load32(GuestPtr(base, ids_ptr + 8 * i + 4)));
   }
-  return XSessionSearch(base, ids, Load32(base + buffer + 16), Load32(base + buffer + 12));
+  return XSessionSearch(base, ids, Load32(GuestPtr(base, buffer + 16)), Load32(GuestPtr(base, buffer + 12)));
 }
 
 uint32_t XSessionSearchById(uint8_t* base, uint32_t buffer) {
-  const uint64_t id = uint64_t(Load32(base + buffer + 4)) << 32 | Load32(base + buffer + 8);
-  return XSessionSearch(base, {id}, Load32(base + buffer + 16), Load32(base + buffer + 12));
+  const uint64_t id = uint64_t(Load32(GuestPtr(base, buffer + 4))) << 32 | Load32(GuestPtr(base, buffer + 8));
+  return XSessionSearch(base, {id}, Load32(GuestPtr(base, buffer + 16)), Load32(GuestPtr(base, buffer + 12)));
 }
 
 // The session a friend we invite should join: the newest joinable session we host, else
@@ -455,16 +458,16 @@ bool InviteSession(uint8_t* out) {
 // (big-endian) user index, invitee count, invitee XUIDs, display text, message handle.
 uint32_t XInviteSend(uint8_t* base, uint32_t message) {
   if (!message) return kInvalidArg;
-  const uint32_t task = Load32(base + message);
+  const uint32_t task = Load32(GuestPtr(base, message));
   if (!task) return kInvalidArg;
-  const uint32_t request = Load32(base + task + 0x18), size = Load32(base + task + 0x1C);
+  const uint32_t request = Load32(GuestPtr(base, task + 0x18)), size = Load32(GuestPtr(base, task + 0x1C));
   if (!request || size < 8) return kInvalidArg;
-  const uint32_t count = std::min<uint32_t>(Load32(base + request + 4), (size - 8) / 8);
+  const uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, request + 4)), (size - 8) / 8);
   uint8_t session[kSessionInfoSize];
   if (!InviteSession(session)) return 0x80155206;  // X_ONLINE_E_SESSION_NOT_FOUND
   for (uint32_t i = 0; i < count; ++i) {
     const uint64_t xuid =
-        uint64_t(Load32(base + request + 8 + 8 * i)) << 32 | Load32(base + request + 12 + 8 * i);
+        uint64_t(Load32(GuestPtr(base, request + 8 + 8 * i))) << 32 | Load32(GuestPtr(base, request + 12 + 8 * i));
     reach::LiveSendInvite(xuid, session);
     REXLOG_INFO("REACH_LIVE: invite sent to {:016X}", xuid);
   }
@@ -479,12 +482,12 @@ uint32_t XInviteGetAcceptedInfo(uint8_t* base, uint32_t args) {
   const uint32_t info = ArgPointer(base, args, 1);
   reach::LiveInvite invite;
   if (!info || !reach::LiveTakeInvite(invite)) return 0x80155206;  // session not found
-  std::memset(base + info, 0, 0x54);
-  Store64(base + info, reach::IdentityXuid());
-  Store64(base + info + 8, invite.inviter_xuid);
-  Store32(base + info + 0x10, kTitleId);
-  std::memcpy(base + info + 0x14, invite.session, kSessionInfoSize);
-  Store32(base + info + 0x50, 1);
+  std::memset(GuestPtr(base, info), 0, 0x54);
+  Store64(GuestPtr(base, info), reach::IdentityXuid());
+  Store64(GuestPtr(base, info + 8), invite.inviter_xuid);
+  Store32(GuestPtr(base, info + 0x10), kTitleId);
+  std::memcpy(GuestPtr(base, info + 0x14), invite.session, kSessionInfoSize);
+  Store32(GuestPtr(base, info + 0x50), 1);
   REXLOG_INFO("REACH_LIVE: joining {}'s game", invite.inviter);
   return kSuccess;
 }
@@ -531,13 +534,13 @@ std::unordered_map<uint64_t, std::vector<uint8_t>> found_qos;  // by session id
 // XUserSetProperty {user index, unused, XUID, property id, size, value pointer}: the
 // property's type is its id's top nibble; types with an inline value are kept.
 void XUserSetProperty(uint8_t* base, uint32_t buffer) {
-  const uint32_t id = Load32(base + buffer + 16), size = Load32(base + buffer + 20);
-  const uint32_t value = Load32(base + buffer + 24);
+  const uint32_t id = Load32(GuestPtr(base, buffer + 16)), size = Load32(GuestPtr(base, buffer + 20));
+  const uint32_t value = Load32(GuestPtr(base, buffer + 24));
   const uint8_t type = uint8_t(id >> 28);
   if (!value || type == 4 || type == 6 || size > 8) return;  // strings, binary
   UserValue v;
   v.type = type;
-  std::memcpy(v.value, base + value, size);
+  std::memcpy(v.value, GuestPtr(base, value), size);
   std::lock_guard<std::mutex> lock(sessions_mutex);
   user_properties[id] = v;
 }
@@ -545,7 +548,7 @@ void XUserSetProperty(uint8_t* base, uint32_t buffer) {
 // XUserSetContext {user index, unused, XUID, context id, value}
 void XUserSetContext(uint8_t* base, uint32_t buffer) {
   std::lock_guard<std::mutex> lock(sessions_mutex);
-  user_contexts[Load32(base + buffer + 16)] = Load32(base + buffer + 20);
+  user_contexts[Load32(GuestPtr(base, buffer + 16))] = Load32(GuestPtr(base, buffer + 20));
 }
 
 // Our session's playlist: the property if we set it, else what we search for (Reach
@@ -633,14 +636,14 @@ bool ParseRecord(const uint8_t* p, size_t n, FoundSession& s) {
 // XSessionSearch above, with each session's properties and contexts after them.
 uint32_t XSessionSearchWeighted(uint8_t* base, uint32_t buffer) {
   constexpr uint32_t kResultSize = 0x5C, kPropertySize = 0x18;
-  const uint32_t max_results = Load32(base + buffer + 8);
-  const uint32_t property_count = Load32(base + buffer + 0x18) >> 16;
-  const uint32_t properties = Load32(base + buffer + 0x1C);
-  const uint32_t results_size = Load32(base + buffer + 0x24), results = Load32(base + buffer + 0x28);
+  const uint32_t max_results = Load32(GuestPtr(base, buffer + 8));
+  const uint32_t property_count = Load32(GuestPtr(base, buffer + 0x18)) >> 16;
+  const uint32_t properties = Load32(GuestPtr(base, buffer + 0x1C));
+  const uint32_t results_size = Load32(GuestPtr(base, buffer + 0x24)), results = Load32(GuestPtr(base, buffer + 0x28));
   if (!results || results_size < 8) return kInvalidArg;
   uint32_t playlist = 0;
   for (uint32_t i = 0; i < property_count && i < 64 && properties; ++i) {
-    const uint8_t* prop = base + properties + kPropertySize * i;
+    const uint8_t* prop = GuestPtr(base, properties + kPropertySize * i);
     if (Load32(prop) == kPropertyHopper) playlist = Load32(prop + 0x10);
   }
   {
@@ -663,16 +666,16 @@ uint32_t XSessionSearchWeighted(uint8_t* base, uint32_t buffer) {
       found = match_results;
     }
   }
-  std::memset(base + results, 0, results_size);
+  std::memset(GuestPtr(base, results), 0, results_size);
   const uint32_t count = std::min<uint32_t>(
       {uint32_t(found.size()), max_results, (results_size - 8) / kResultSize});
-  Store32(base + results, count);
-  Store32(base + results + 4, results + 8);
+  Store32(GuestPtr(base, results), count);
+  Store32(GuestPtr(base, results + 4), results + 8);
   uint32_t extra = results + 8 + count * kResultSize;  // properties and contexts go here
   const uint32_t end = results + results_size;
   for (uint32_t i = 0; i < count; ++i) {
     const FoundSession& s = found[i];
-    uint8_t* r = base + results + 8 + i * kResultSize;
+    uint8_t* r = GuestPtr(base, results + 8 + i * kResultSize);
     std::memcpy(r, s.info, kSessionInfoSize);
     Store32(r + 0x3C, s.slots[0] > s.slots[2] ? s.slots[0] - s.slots[2] : 0);
     Store32(r + 0x40, s.slots[1] > s.slots[3] ? s.slots[1] - s.slots[3] : 0);
@@ -685,15 +688,15 @@ uint32_t XSessionSearchWeighted(uint8_t* base, uint32_t buffer) {
     Store32(r + 0x50, uint32_t(s.contexts.size()));
     Store32(r + 0x54, extra);
     for (const auto& [id, v] : s.properties) {
-      Store32(base + extra, id);
+      Store32(GuestPtr(base, extra), id);
       base[extra + 8] = v.type;
-      std::memcpy(base + extra + 0x10, v.value, 8);
+      std::memcpy(GuestPtr(base, extra + 0x10), v.value, 8);
       extra += kPropertySize;
     }
     Store32(r + 0x58, extra);
     for (const auto& [id, value] : s.contexts) {
-      Store32(base + extra, id);
-      Store32(base + extra + 4, value);
+      Store32(GuestPtr(base, extra), id);
+      Store32(GuestPtr(base, extra + 4), value);
       extra += 8;
     }
   }
@@ -872,12 +875,12 @@ extern "C" REX_FUNC(__imp__XamUserAreUsersFriends) {
   const auto roster = reach::LiveRoster();
   bool all = count > 0;
   for (uint32_t i = 0; i < count && xuids; ++i) {
-    const uint64_t xuid = uint64_t(Load32(base + xuids + 8 * i)) << 32 | Load32(base + xuids + 8 * i + 4);
+    const uint64_t xuid = uint64_t(Load32(GuestPtr(base, xuids + 8 * i))) << 32 | Load32(GuestPtr(base, xuids + 8 * i + 4));
     bool found = false;
     for (const auto& f : roster) found = found || f.xuid == xuid;
     all = all && found;
   }
-  if (result) Store32(base + result, all ? 1 : 0);
+  if (result) Store32(GuestPtr(base, result), all ? 1 : 0);
   if (overlapped) {
     REX_KERNEL_STATE()->CompleteOverlappedImmediate(overlapped, kSuccess);
     ctx.r3.u64 = kIoPending;
@@ -901,10 +904,10 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosListen) {
   constexpr uint32_t kSetData = 0x4, kDisable = 0x2, kRelease = 0x10;
   const uint32_t id_ptr = ctx.r4.u32, data = ctx.r5.u32, size = ctx.r6.u32, flags = ctx.r8.u32;
   if (reach::LiveSignin() && id_ptr) {
-    const uint64_t id = uint64_t(Load32(base + id_ptr)) << 32 | Load32(base + id_ptr + 4);
+    const uint64_t id = uint64_t(Load32(GuestPtr(base, id_ptr))) << 32 | Load32(GuestPtr(base, id_ptr + 4));
     std::lock_guard<std::mutex> lock(sessions_mutex);
     if ((flags & kSetData) && data) {
-      qos_data[id].assign(base + data, base + data + std::min<uint32_t>(size, 1000));
+      qos_data[id].assign(GuestPtr(base, data), GuestPtr(base, data) + std::min<uint32_t>(size, 1000));
     }
     if (flags & (kDisable | kRelease)) qos_data.erase(id);
     PublishPresenceLocked();
@@ -925,7 +928,7 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
     if (sdk) sdk(ctx, base);
     return;
   }
-  auto stack_arg = [&](int index) { return Load32(base + ctx.r1.u32 + 0x54 + (index - 8) * 8); };
+  auto stack_arg = [&](int index) { return Load32(GuestPtr(base, ctx.r1.u32 + 0x54 + (index - 8) * 8)); };
   const uint32_t count = std::min<uint32_t>(ctx.r4.u32, 64), xnas = ctx.r5.u32;
   const uint32_t xnkids = ctx.r6.u32;
   const uint32_t probes = stack_arg(8), event = stack_arg(11), out = stack_arg(12);
@@ -933,13 +936,13 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
   std::vector<std::vector<uint8_t>> data(count);
   std::vector<bool> known(count, false);
   for (uint32_t i = 0; i < count && xnas; ++i) {
-    const uint32_t xna = Load32(base + xnas + 4 * i);
+    const uint32_t xna = Load32(GuestPtr(base, xnas + 4 * i));
     if (!xna) continue;
-    const uint32_t ina = Load32(base + xna);
+    const uint32_t ina = Load32(GuestPtr(base, xna));
     if ((ina & 0xFF000000) != 0xF0000000) continue;  // not a Reach Live player
-    if (const uint32_t kid = xnkids ? Load32(base + xnkids + 4 * i) : 0) {
+    if (const uint32_t kid = xnkids ? Load32(GuestPtr(base, xnkids + 4 * i)) : 0) {
       std::lock_guard<std::mutex> lock(match_mutex);  // a matchmaking session we found
-      auto it = found_qos.find(uint64_t(Load32(base + kid)) << 32 | Load32(base + kid + 4));
+      auto it = found_qos.find(uint64_t(Load32(GuestPtr(base, kid))) << 32 | Load32(GuestPtr(base, kid + 4)));
       if (it != found_qos.end()) {
         known[i] = true;
         data[i] = it->second;
@@ -964,11 +967,11 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
     ctx.r3.u64 = 0x8007000E;  // E_OUTOFMEMORY
     return;
   }
-  std::memset(base + qos, 0, total);
-  Store32(base + qos, count);  // cxnqos; cxnqosPending stays 0
+  std::memset(GuestPtr(base, qos), 0, total);
+  Store32(GuestPtr(base, qos), count);  // cxnqos; cxnqosPending stays 0
   uint32_t data_ptr = qos + 8 + kInfoSize * std::max<uint32_t>(count, 1);
   for (uint32_t i = 0; i < count; ++i) {
-    uint8_t* info = base + qos + 8 + kInfoSize * i;
+    uint8_t* info = GuestPtr(base, qos + 8 + kInfoSize * i);
     // XNQOSINFO: flags, reserved, probes sent u16, probes received u16, data size u16,
     // data pointer, RTT min u16, RTT median u16, up and down bits per second.
     const uint16_t sent = uint16_t(std::max<uint32_t>(probes, 1));
@@ -982,7 +985,7 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
       info[7] = uint8_t(data[i].size());
       if (!data[i].empty()) {
         Store32(info + 8, data_ptr);
-        std::memcpy(base + data_ptr, data[i].data(), data[i].size());
+        std::memcpy(GuestPtr(base, data_ptr), data[i].data(), data[i].size());
         data_ptr += uint32_t(data[i].size());
       }
       info[0xD] = 20;  // ms
@@ -991,7 +994,7 @@ extern "C" REX_FUNC(__imp__NetDll_XNetQosLookup) {
       Store32(info + 0x14, 2000000);
     }
   }
-  if (out) Store32(base + out, qos);
+  if (out) Store32(GuestPtr(base, out), qos);
   if (event) {
     if (auto ev = REX_KERNEL_OBJECTS()->LookupObject<rex::system::XEvent>(event)) ev->Set(0, false);
   }
@@ -1012,7 +1015,7 @@ extern "C" REX_FUNC(__imp__XNetLogonGetTitleID) {
 // 0xFA000000xxxxxxxx; ours comes from the XUID.
 extern "C" REX_FUNC(__imp__XNetLogonGetMachineID) {
   if (ctx.r3.u32) {
-    Store64(base + ctx.r3.u32, 0xFA00000000000000ull | (reach::IdentityXuid() & 0xFFFFFFFFull));
+    Store64(GuestPtr(base, ctx.r3.u32), 0xFA00000000000000ull | (reach::IdentityXuid() & 0xFFFFFFFFull));
   }
   ctx.r3.u64 = 0;
 }

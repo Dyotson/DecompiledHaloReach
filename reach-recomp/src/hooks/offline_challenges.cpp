@@ -27,6 +27,7 @@
 // REACH_OFFLINE_CHALLENGES=0 turns all of this off. Addresses: docs/progression_re.md.
 
 #include "../kernel/identity.h"
+#include "../platform/guest_memory.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
@@ -46,6 +47,8 @@
 #include <filesystem>
 #include <functional>
 #include <string>
+
+using reach::GuestPtr;
 
 static_assert(offsetof(PPCContext, r3) == 0, "hooks recover ctx from &ctx.r3");
 
@@ -150,9 +153,9 @@ int PickChallenge(PPCContext& ctx, uint8_t* base, uint8_t category, uint64_t see
   for (int index = 0; index < 64; ++index) {
     uint32_t def = CallGuest(ctx, base, sub_8258E2D0, category, uint32_t(index));
     if (!def) break;
-    if (!base[def + 0x30] || int32_t(Load32(base + def + 0x18)) <= 0) continue;
+    if (!base[def + 0x30] || int32_t(Load32(GuestPtr(base, def + 0x18))) <= 0) continue;
     usable[count++] = index;
-    if (Load32(base + def + 0x34) == 0) any_map[count_any++] = index;
+    if (Load32(GuestPtr(base, def + 0x34)) == 0) any_map[count_any++] = index;
   }
   if (count_any) return any_map[SplitMix(seed) % uint64_t(count_any)];
   if (count) return usable[SplitMix(seed) % uint64_t(count)];
@@ -197,9 +200,9 @@ void WriteSaved(const SavedProgress& in) {
 // Progress of the controller's entries in a set; completed ones as kCompleted.
 std::array<int32_t, kMaxEntries> ReadProgress(const uint8_t* base, uint32_t set, uint32_t ctrl) {
   std::array<int32_t, kMaxEntries> progress{};
-  uint32_t count = std::min<uint32_t>(Load32(base + set + 0x10), kMaxEntries);
+  uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, set + 0x10)), kMaxEntries);
   for (uint32_t i = 0; i < count; ++i) {
-    const uint8_t* entry = base + set + 0x14 + i * kEntryStride;
+    const uint8_t* entry = GuestPtr(base, set + 0x14 + i * kEntryStride);
     int32_t value = int32_t(Load32(entry + 0xC + 8 * ctrl));
     int32_t target = int32_t(Load32(entry + 0x40));
     progress[i] = target > 0 && value >= target ? kCompleted : value;
@@ -211,9 +214,9 @@ void ApplyPeriod(PPCContext& ctx, uint8_t* base, uint32_t ctrl, const Period& pe
   // The dcha chunk (header + payload, 0x256 bytes) on the guest stack below r1.
   PPCContext saved = ctx;
   ctx.r1.u32 = (ctx.r1.u32 - 0x400) & ~0xFu;
-  Store32(base + ctx.r1.u32, saved.r1.u32);  // back chain
+  Store32(GuestPtr(base, ctx.r1.u32), saved.r1.u32);  // back chain
   const uint32_t chunk = ctx.r1.u32 + 0x80;
-  uint8_t* p = base + chunk;
+  uint8_t* p = GuestPtr(base, chunk);
   std::memset(p, 0, 0x256);
   Store32(p, 0x64636861);  // 'dcha'
   Store32(p + 4, 0x256);
@@ -233,7 +236,7 @@ void ApplyPeriod(PPCContext& ctx, uint8_t* base, uint32_t ctrl, const Period& pe
       for (int i = 0; i < 64; ++i) {
         uint32_t def = CallGuest(ctx, base, sub_8258E2D0, category, uint32_t(i));
         if (!def) break;
-        const uint8_t* d = base + def;
+        const uint8_t* d = GuestPtr(base, def);
         REXLOG_INFO("Challenge {}:{} target {} cR {} events {:08X} modes {:02X} mm {:02X} "
                     "difficulty {:02X} players {:02X} map {:08X} param {:08X}",
                     category, i, int32_t(Load32(d + 0x14)), int32_t(Load32(d + 0x18)),
@@ -285,7 +288,7 @@ void ApplyPeriod(PPCContext& ctx, uint8_t* base, uint32_t ctrl, const Period& pe
   SavedProgress saved_progress;
   if (LoadSaved(saved_progress) && saved_progress.daily_id == period.daily_id &&
       saved_progress.weekly_id == period.weekly_id) {
-    uint8_t* chpr = base + kSavedProgress + ctrl * 100;
+    uint8_t* chpr = GuestPtr(base, kSavedProgress + ctrl * 100);
     std::memset(chpr, 0, 100);
     Store32(chpr, 0x63687072);  // 'chpr'
     Store32(chpr + 4, 100);
@@ -322,8 +325,8 @@ void ReachChallengeTick(PPCRegister& r3) {
   // earns while unsynced at the network configuration's offline cap (default 1000 cR
   // per sync period) instead of the online one (100000). Playing without the server is
   // normal here, so the offline cap follows the online one.
-  if (Load32(base + kOfflineCookieCap) < Load32(base + kOnlineCookieCap)) {
-    Store32(base + kOfflineCookieCap, Load32(base + kOnlineCookieCap));
+  if (Load32(GuestPtr(base, kOfflineCookieCap)) < Load32(GuestPtr(base, kOnlineCookieCap))) {
+    Store32(GuestPtr(base, kOfflineCookieCap), Load32(GuestPtr(base, kOnlineCookieCap)));
   }
   if (!Enabled()) return;
   PPCContext& ctx = *reinterpret_cast<PPCContext*>(&r3);
@@ -332,22 +335,22 @@ void ReachChallengeTick(PPCRegister& r3) {
 
   const Period period = CurrentPeriod();
   const uint32_t daily_set = kDailySet, weekly_set = kDailySet + kSetStride;
-  if (!base[kSetsLoaded] || Load32(base + daily_set) != period.daily_id ||
-      Load32(base + weekly_set) != period.weekly_id) {
+  if (!base[kSetsLoaded] || Load32(GuestPtr(base, daily_set)) != period.daily_id ||
+      Load32(GuestPtr(base, weekly_set)) != period.weekly_id) {
     // At most one attempt every 5 s if the game does not take the set.
     static auto last_attempt = std::chrono::steady_clock::time_point();
     const auto now = std::chrono::steady_clock::now();
     if (now - last_attempt < std::chrono::seconds(5)) return;
     last_attempt = now;
     ApplyPeriod(ctx, base, ctrl, period);
-    if (Load32(base + daily_set) != period.daily_id) return;  // not applied (yet)
+    if (Load32(GuestPtr(base, daily_set)) != period.daily_id) return;  // not applied (yet)
   }
 
   // Keep "progress loaded" set (signing in clears it) and let matchmaking-only
   // challenges count everywhere (definitions are re-copied, so every tick).
   base[kChallengeState] |= uint8_t(1u << ctrl);
   for (uint32_t set : {daily_set, weekly_set}) {
-    uint32_t count = std::min<uint32_t>(Load32(base + set + 0x10), kMaxEntries);
+    uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, set + 0x10)), kMaxEntries);
     for (uint32_t i = 0; i < count; ++i) base[set + 0x14 + i * kEntryStride + 0x2C + 0x31] |= 1;
   }
 

@@ -11,6 +11,7 @@
 
 #include "live_tcp.h"
 
+#include "../platform/guest_memory.h"
 #include "live.h"
 
 #include "../platform/socket.h"
@@ -23,6 +24,8 @@
 #include <mutex>
 #include <unordered_map>
 #include <vector>
+
+using reach::GuestPtr;
 
 namespace reach::tcp {
 
@@ -62,15 +65,15 @@ sock::Handle Fd(uint32_t handle) {
 std::vector<uint32_t> ReadSet(uint8_t* base, uint32_t set) {
   std::vector<uint32_t> handles;
   if (!set) return handles;
-  uint32_t count = std::min<uint32_t>(Load32(base + set), 64);
-  for (uint32_t i = 0; i < count; ++i) handles.push_back(Load32(base + set + 4 + 4 * i));
+  uint32_t count = std::min<uint32_t>(Load32(GuestPtr(base, set)), 64);
+  for (uint32_t i = 0; i < count; ++i) handles.push_back(Load32(GuestPtr(base, set + 4 + 4 * i)));
   return handles;
 }
 
 void WriteSet(uint8_t* base, uint32_t set, const std::vector<uint32_t>& handles) {
   if (!set) return;
-  Store32(base + set, uint32_t(handles.size()));
-  for (size_t i = 0; i < handles.size(); ++i) Store32(base + set + 4 + 4 * i, handles[i]);
+  Store32(GuestPtr(base, set), uint32_t(handles.size()));
+  for (size_t i = 0; i < handles.size(); ++i) Store32(GuestPtr(base, set + 4 + 4 * i), handles[i]);
 }
 
 }  // namespace
@@ -194,8 +197,8 @@ int32_t Select(uint8_t* base, uint32_t readfds, uint32_t writefds, uint32_t exce
   }
   int wait_ms = -1;
   if (timeout) {
-    int64_t us = int64_t(int32_t(Load32(base + timeout))) * 1000000 +
-                 int32_t(Load32(base + timeout + 4));
+    int64_t us = int64_t(int32_t(Load32(GuestPtr(base, timeout)))) * 1000000 +
+                 int32_t(Load32(GuestPtr(base, timeout + 4)));
     wait_ms = int(std::max<int64_t>(0, (us + 999) / 1000));
   }
   const int n = sock::Poll(polls.data(), polls.size(), wait_ms);
