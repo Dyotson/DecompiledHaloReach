@@ -4,10 +4,12 @@ A native PC port of **Halo: Reach (Xbox 360)** built by statically recompiling t
 original PowerPC executable to C++ with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk),
 plus the reverse-engineering notes and tooling needed to get it running.
 
-> **Status: early work in progress.** The recompiled game boots on Linux, renders the
-> menus, plays the first campaign mission's opening cinematic and reaches gameplay with
-> the world rendered like in Xenia. Adaptively tessellated surfaces (probably water) are
-> still skipped because they hang the GPU.
+> **Status: playable on Linux, work in progress.** The campaign, Firefight, Forge,
+> Theater and custom games run natively with keyboard and mouse or a controller.
+> Credits, ranks, the Armory and daily/weekly challenges work without Bungie's servers.
+> Online play goes through a self-hostable **Reach Live** server that stands in for
+> Xbox LIVE and Bungie's services: friends, invites, System Link over the internet and
+> File Share. Matchmaking and Windows builds are not done yet.
 
 This repository contains **no game code and no game data**. You need your own copy of
 the game (see [Legal](#legal)).
@@ -32,9 +34,12 @@ the game (see [Legal](#legal)).
   - `reach-recomp/hints/`: function boundaries and entry points the code scanner
     missed, plus statically linked XAPI routines mapped to native SDK versions
     (for example, the game's fiber switching).
-  - `reach-recomp/src/`: the app class and native overrides of kernel exports (RSA
-    public-key crypto, scripted controller input for automated tests, cross-DLL
-    import thunks).
+  - `reach-recomp/src/`: the app class and native overrides of kernel and XAM exports:
+    the virtual network and Reach Live client, Xbox LIVE services (friends, presence,
+    sessions, invites, title servers), offline challenges, keyboard and mouse,
+    runtime fixes (critical sections, file sizes, enumeration codes), RSA public-key
+    crypto, scripted input and frame dumps for automated tests, cross-DLL import thunks.
+  - `server/`: Reach Live, the self-hostable online server (standard-library Python).
   - `tools/`: an ISO extractor, entry-point discovery against Ghidra, thunk
     generation, run and debug scripts, and Ghidra repair scripts.
   - `docs/`: findings, the status log and debugging recipes.
@@ -49,10 +54,11 @@ the game (see [Legal](#legal)).
 | Intro video | Plays |
 | Title screen and start menu | Render correctly with the patched GPU plugin (the SDK bug behind the black menu is described in `docs/menu_black_screen.md`) |
 | Campaign (Winter Contingency) | Loads, plays the opening and reaches gameplay; rendering matches Xenia after 19 SDK GPU patches ([`docs/sdk_patches.md`](docs/sdk_patches.md)); real occlusion queries, so the game no longer issues the water draw that hangs the GPU |
-| Progression (cR/rank/Armory) | Works offline: cR earned in play, rank-ups, Armory purchases saved in the profile, Spartan preview in the Armory and post-game screens, daily and weekly challenges picked locally each day ([`docs/progression_re.md`](docs/progression_re.md)) |
+| Firefight, custom games, Theater | Play locally; films of past games play back in Theater |
+| Progression (cR/rank/Armory) | Works offline: cR earned in play, rank-ups, Armory purchases saved in the profile, Spartan preview in the Armory and post-game screens, daily and weekly challenges picked locally each day, counting kills and paying out on completion ([`docs/progression_re.md`](docs/progression_re.md)); with a Reach Live server, progression is also stored server-side |
 | Forge | Works locally: editing on Sword Base, object placement, saving map variants |
-| Online | Over the internet through a self-hosted **Reach Live** server: an emulated Xbox LIVE (friends roster, presence, joining a friend's lobby) and System Link (the game's browser lists everyone's games). Tested with up to three players on one machine: Firefight and Slayer, host migration. Direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Matchmaking, file share and Xbox LIVE party are not available |
-| File share | Not started |
+| Online | Over the internet through a self-hosted **Reach Live** server: an emulated Xbox LIVE (friends roster, presence, joining a friend, invites) and System Link (the game's browser lists everyone's games). Tested with up to three players on one machine: Firefight and Slayer through the postgame, host migration. Direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Matchmaking (in progress) and Xbox LIVE party are not available |
+| File share | Through Reach Live: upload maps and game types from the game's File Share UI, browse a friend's share from the roster and download into Local Files ([`docs/online_plan.md`](docs/online_plan.md) section 5.3) |
 | Higher resolution | `resolution_scale = 2` in `reach.toml` (or `--resolution_scale=2`) renders at 2304×1440 instead of 1152×720; menus and Firefight checked, no artifacts seen. Frame rate on a dedicated GPU still to be measured |
 | Keyboard and mouse | On by default next to pads: Halo-style bindings (rebindable `kbm_bind_*` cvars) and raw mouse look fed straight into player control, no stick emulation ([`docs/input.md`](docs/input.md)) |
 
@@ -60,7 +66,8 @@ See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debuggi
 
 ## Requirements
 
-- Linux x86-64 with a Vulkan 1.3 GPU (Windows support comes later)
+- Linux x86-64 with a Vulkan 1.3 GPU (Windows: the SDK ships a win-amd64 build of the same
+  nightly and our code is being made portable; not buildable yet)
 - Your own Halo: Reach Xbox 360 disc image (base version, no title update)
 - [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk) **0.10.0.24 nightly** (`nightly-20261002-bd833a2a`; v0.10.0 lacks
   atomic/fence fixes). Install prefix, for example `~/rexglue-sdk-nightly/0.10.0.24/linux-amd64`
