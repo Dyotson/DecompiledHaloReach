@@ -15,6 +15,7 @@
 // server/reach_live_lsp.py answers. The marketplace asset enumeration (0x58042) is
 // empty. Every other enumerator goes to the SDK.
 
+#include "../platform/sdk_import.h"
 #include "identity.h"
 #include "live.h"
 
@@ -25,7 +26,6 @@
 #include <rex/system/xenumerator.h>
 #include <rex/system/xtypes.h>
 
-#include <dlfcn.h>
 
 #include <cstdint>
 #include <cstring>
@@ -74,7 +74,7 @@ extern "C" REX_FUNC(__imp__XamCreateEnumeratorHandle) {
   if (app_id != kXLiveBaseApp || (!title_servers && open != kMarketplaceAssetOpen) ||
       !reach::LiveSignin()) {
     static GuestFunc sdk =
-        reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__XamCreateEnumeratorHandle"));
+        reach::SdkImport("__imp__XamCreateEnumeratorHandle");
     if (sdk) sdk(ctx, base);
     return;
   }

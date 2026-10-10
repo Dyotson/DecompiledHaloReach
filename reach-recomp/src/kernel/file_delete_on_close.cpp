@@ -10,6 +10,8 @@
 // after the SDK closed it, delete it through the VFS (which removes the host
 // directory too).
 
+#include "../platform/sdk_import.h"
+
 #include <rex/filesystem/entry.h>
 #include <rex/filesystem/vfs.h>
 #include <rex/logging.h>
@@ -18,7 +20,6 @@
 #include <rex/system/kernel_state.h>
 #include <rex/system/xfile.h>
 
-#include <dlfcn.h>
 
 #include <cstdint>
 #include <string>
@@ -29,7 +30,7 @@ using GuestFunc = void (*)(PPCContext&, uint8_t*);
 
 // NTSTATUS NtClose(HANDLE handle)
 extern "C" REX_FUNC(__imp__NtClose) {
-  static GuestFunc sdk = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__NtClose"));
+  static GuestFunc sdk = reach::SdkImport("__imp__NtClose");
 
   std::string pending_path;
   if (auto* kernel = rex::system::kernel_state()) {

@@ -14,13 +14,13 @@
 // the sign-in state is 2, the info has the Live-enabled flag and every privilege
 // is granted.
 
+#include "../platform/sdk_import.h"
 #include "identity.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <cstdint>
@@ -45,7 +45,7 @@ bool NoSignin() {
   return enabled;
 }
 
-GuestFunc Sdk(const char* name) { return reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, name)); }
+GuestFunc Sdk(const char* name) { return reach::SdkImport(name); }
 
 uint64_t XuidOverride() { return reach::IdentityXuid(); }
 

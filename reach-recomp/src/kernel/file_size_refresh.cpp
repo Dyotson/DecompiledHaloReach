@@ -7,13 +7,14 @@
 // a chunk ran past the end and the transfer failed. This wraps NtWriteFile and
 // refreshes the entry when the write moved the file position past the cached size.
 
+#include "../platform/sdk_import.h"
+
 #include <rex/filesystem/entry.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xfile.h>
 
-#include <dlfcn.h>
 
 #include <cstdint>
 
@@ -24,7 +25,7 @@ using GuestFunc = void (*)(PPCContext&, uint8_t*);
 // NTSTATUS NtWriteFile(HANDLE file, HANDLE event, PIO_APC_ROUTINE apc, PVOID apc_context,
 //     PIO_STATUS_BLOCK io_status, PVOID buffer, ULONG length, PLARGE_INTEGER byte_offset)
 extern "C" REX_FUNC(__imp__NtWriteFile) {
-  static GuestFunc sdk = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__NtWriteFile"));
+  static GuestFunc sdk = reach::SdkImport("__imp__NtWriteFile");
   const uint32_t handle = ctx.r3.u32, length = ctx.r9.u32, offset_ptr = ctx.r10.u32;
   uint64_t end = 0;  // where the write ends, if it has an explicit offset
   if (offset_ptr) {

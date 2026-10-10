@@ -9,11 +9,12 @@
 // string as it is. Without --headless every call goes to the SDK, whose ImGui
 // keyboard converts correctly.
 
+#include "../platform/sdk_import.h"
+
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/flags.h>
 
-#include <dlfcn.h>
 
 #include <cstdint>
 #include <cstring>
@@ -38,7 +39,7 @@ constexpr uint32_t kErrorInvalidParameter = 0x00000057;  // X_ERROR_INVALID_PARA
 extern "C" REX_FUNC(__imp__XamShowKeyboardUI) {
   if (!REXCVAR_GET(headless)) {
     static GuestFunc sdk =
-        reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__XamShowKeyboardUI"));
+        reach::SdkImport("__imp__XamShowKeyboardUI");
     if (sdk) sdk(ctx, base);
     return;
   }

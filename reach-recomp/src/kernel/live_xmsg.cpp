@@ -29,6 +29,7 @@
 // did before) and what we answered. Message layouts follow the Xenia netplay fork
 // (AdrianCassar/xenia-canary, BSD), see docs/online_plan.md.
 
+#include "../platform/sdk_import.h"
 #include "identity.h"
 #include "live.h"
 
@@ -43,7 +44,6 @@
 #include <rex/system/xthread.h>
 #include <rex/system/xtypes.h>
 
-#include <dlfcn.h>
 
 #include <algorithm>
 #include <chrono>
@@ -535,7 +535,7 @@ void LogMessage(const char* name, const uint32_t (&in)[6], uint32_t result, bool
               name, in[0], in[1], in[2], in[3], in[4], in[5], result, ours ? " (REACH_LIVE)" : "");
 }
 
-GuestFunc Sdk(const char* name) { return reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, name)); }
+GuestFunc Sdk(const char* name) { return reach::SdkImport(name); }
 
 }  // namespace
 

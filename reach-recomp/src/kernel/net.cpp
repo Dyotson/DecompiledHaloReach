@@ -35,6 +35,7 @@
 // registers r3-r8 and the result; busy calls are logged for their first 20
 // calls and then every 1000th.
 
+#include "../platform/sdk_import.h"
 #include "identity.h"
 #include "live.h"
 #include "live_tcp.h"
@@ -45,7 +46,6 @@
 #include <rex/system/xthread.h>
 
 #include <arpa/inet.h>
-#include <dlfcn.h>
 #include <netdb.h>
 #include <netinet/in.h>
 #include <poll.h>
@@ -1065,7 +1065,7 @@ bool LiveTakeInvite(LiveInvite& out) { return NetOn() && VNet::Get().TakeInvite(
 }  // namespace reach
 
 #define REACH_NET_SDK(name) \
-  static GuestFunc sdk = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__" #name))
+  static GuestFunc sdk = reach::SdkImport("__imp__" #name)
 
 #define REACH_NET_TRACE(name)                                          \
   extern "C" REX_FUNC(__imp__##name) {                                 \

@@ -19,13 +19,13 @@
 // ("Space", "LMB", "WheelUp"; 0.3 s by default), "MOUSE:dx,dy" moves the mouse by that many
 // counts.
 
+#include "../platform/sdk_import.h"
 #include "../input/kbm.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
-#include <dlfcn.h>
 #include <fcntl.h>
 #include <unistd.h>
 
@@ -173,7 +173,7 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
 }
 
 GuestFunc SdkGetState() {
-  static GuestFunc fn = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__XamInputGetState"));
+  static GuestFunc fn = reach::SdkImport("__imp__XamInputGetState");
   return fn;
 }
 

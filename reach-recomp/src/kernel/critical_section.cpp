@@ -15,11 +15,12 @@
 // a contended waiter blocks on a host semaphore keyed by the critical section's address,
 // which no guest memory can alias. REACH_SDK_CRITICAL_SECTIONS=1 restores the SDK's.
 
+#include "../platform/sdk_import.h"
+
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/xthread.h>
 
-#include <dlfcn.h>
 
 #include <condition_variable>
 #include <cstdint>
@@ -40,7 +41,7 @@ bool UseSdk() {
   return on;
 }
 
-GuestFunc Sdk(const char* name) { return reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, name)); }
+GuestFunc Sdk(const char* name) { return reach::SdkImport(name); }
 
 // Guest memory is big-endian; the lock count is changed atomically in place.
 int32_t AtomicAdd(uint8_t* p, int32_t delta) {

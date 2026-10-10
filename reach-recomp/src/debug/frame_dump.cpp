@@ -27,6 +27,8 @@
 // can be caught by hand while watching periodic frame dumps; load times vary
 // too much between runs for fixed times to land on the same shot.
 
+#include "../platform/sdk_import.h"
+
 #include <rex/logging.h>
 #include <rex/runtime.h>
 #include <rex/system/interfaces/graphics.h>
@@ -37,8 +39,13 @@
 #include <rex/system/xmemory.h>
 #include <rex/thread/mutex.h>
 
-#include <dlfcn.h>
 #include <renderdoc/renderdoc_app.h>
+
+#ifdef _WIN32
+#include <windows.h>
+#else
+#include <dlfcn.h>
+#endif
 
 #include <algorithm>
 #include <chrono>
@@ -179,9 +186,15 @@ void MaybeTriggerRenderDocCapture(double now) {
   }
   if (!due) return;
   if (!api) {
+#ifdef _WIN32
+    HMODULE lib = GetModuleHandleA("renderdoc.dll");
+    auto get_api =
+        lib ? reinterpret_cast<pRENDERDOC_GetAPI>(GetProcAddress(lib, "RENDERDOC_GetAPI")) : nullptr;
+#else
     void* lib = dlopen("librenderdoc.so", RTLD_NOW | RTLD_NOLOAD);
     auto get_api =
         lib ? reinterpret_cast<pRENDERDOC_GetAPI>(dlsym(lib, "RENDERDOC_GetAPI")) : nullptr;
+#endif
     if (!get_api || !get_api(eRENDERDOC_API_Version_1_0_0, reinterpret_cast<void**>(&api)) ||
         !api) {
       REXLOG_WARN("REACH_RDCAPTURE: RenderDoc is not loaded (run under renderdoccmd capture)");
@@ -232,7 +245,7 @@ void CaptureHostOutput(double now, const std::string& dir) {
 // void VdSwap(buffer_ptr, fetch_ptr, unk2, unk3, unk4, frontbuffer_ptr,
 //             texture_format_ptr, color_space_ptr, width_ptr, height_ptr)
 extern "C" REX_FUNC(__imp__VdSwap) {
-  static GuestFunc sdk = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__VdSwap"));
+  static GuestFunc sdk = reach::SdkImport("__imp__VdSwap");
   static const auto start = std::chrono::steady_clock::now();
   const uint32_t fetch_addr = ctx.r4.u32;
 

@@ -10,13 +10,14 @@
 // (sub_82200A00) skipped pending joins, so System Link joins never started.
 // Synchronous calls (no XOVERLAPPED) go to the SDK unchanged.
 
+#include "../platform/sdk_import.h"
+
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/kernel_state.h>
 #include <rex/system/xenumerator.h>
 #include <rex/system/xtypes.h>
 
-#include <dlfcn.h>
 
 #include <cstdint>
 
@@ -31,7 +32,7 @@ extern "C" REX_FUNC(__imp__XamEnumerate) {
   const uint32_t buffer = ctx.r5.u32;
   const uint32_t overlapped = ctx.r8.u32;
   if (!overlapped) {
-    static GuestFunc sdk = reinterpret_cast<GuestFunc>(dlsym(RTLD_NEXT, "__imp__XamEnumerate"));
+    static GuestFunc sdk = reach::SdkImport("__imp__XamEnumerate");
     if (sdk) sdk(ctx, base);
     return;
   }
