@@ -486,3 +486,90 @@ Not done: tags, recommendations, predefined queries (`fpre`) and megalo categori
 (`fmca`), screenshot previews, the per-type counters next to a share (they stay 0), and
 the service record (`UserGetServiceRecord.ashx` returns an empty `srid` v7 chunk of 0xD48
 bytes, read straight into the game's buffer; not checked in game).
+
+### 5.4 Matchmaking
+
+Goal: Matchmaking on a Reach Live server with the server's own playlists. The playlists are
+title storage files the game downloads over HTTP from the server
+(`/storage/title/4d53085b/tracked/11860/default_hoppers/…`); `server/reach_live_hoppers.py`
+writes them under `DATA_DIR/storage/` and the server serves them as stored files. No Bungie
+file is in the repository: the generator builds every file from scratch, and the two values
+it needs from the operator's game (a hash salt and the map signatures) are read from the
+operator's copy.
+
+```
+python3 tools/guestmem.py dump PID 0x83AB0000 34 DATA_DIR/title_key.bin   # once, PID = a running client
+python3 server/reach_live_hoppers.py DATA_DIR --maps extracted/xbox360/maps
+```
+
+**Status.** With the generated files the Matchmaking lobby lists the server's playlists
+(PLAYLIST shows "TEAM SLAYER") instead of "The Halo: Reach server is unavailable". The
+game then downloads the playlist's game set (`00101/game_set_015.bin`), which is not
+generated yet, so the lobby says "This playlist is currently unavailable".
+
+#### Download and validation
+
+All files are BLF files (`_blf` v1.2, chunks, `_eof` v1.1 with authentication 0; the chunk
+finder `sub_822E1FB8` matches fourcc and major version). Each title file is an object in
+the container at 0x83336D80 (built by `sub_822DF7F0`), with a name, a request at +0x4C
+(URL at +0x8, state at +0x66C: 5 = done, 7 = failed) and a load state at +0x34 (1 =
+loaded). Requests have a validation mode (+0x10C): 0 none, 1 hash listed in the manifest,
+2 the same for a localized file under `en/`.
+
+The hash is **SHA-1 over a 34-byte salt followed by the file** (`Crypto_Sha1Buffer`
+0x82214080 with its third argument 1; the salt is the first 0x22 bytes of the executable's
+resource "00", 0x138 bytes at 0x83AB0000, whose RSA public key starts at +0x28). In
+`sub_822DD4C8` a downloaded mode-1/2 file is checked against the manifest entry for its
+path; a path the manifest does not list is accepted unchecked (and its hash remembered
+for a while), so an empty manifest would also do. A game set, game variant or map variant
+is instead checked against the hash its parent lists (request flag +4 bit 0, expected hash
+at +0x120), with no fallback, so the generator needs the salt from the operator's game.
+No client change was needed: the manifest itself is not signed (mode 0).
+
+| File | Chunk | Contents |
+| --- | --- | --- |
+| `manifest_001.bin` | `onfm` v1 | u32 count, then {char path[0x50] relative to `default_hoppers` with a leading `/`, lowercase; salted SHA-1} per file |
+| `en/rsa_manifest.bin` (object +0, required) | `mapm` v1, 0x8004 bytes | u32 count, 128 RSA signatures of 0x100 bytes. When a map loads (`sub_826E93C8` → `sub_822DBE78`) its header signature (file offset 0x36C) must be listed, or the console is flagged as running modified content (byte 0x8330E589). The generator lists the operator's maps |
+| `network_configuration_241.bin` (optional) | `netc` v241, 0x2254 bytes raw | Network tuning, applied to 0x82BD28A8 (`sub_82299860`). Optional: the game keeps its built-in defaults when it is missing. +0x1B02 (0x82BD43AA) non-zero disables the Arena season check below |
+| `dlc_map_manifest.bin` (required) | `dlcd` v1, 0xF504 bytes raw | DLC maps; all zero = none |
+| `en/matchmaking_banhammer_messages.bin` | `bhms` v1 | optional, not generated |
+| `matchmaking_hopper_027.bin` (required) | `mhcf` v27 | the hopper table, below |
+| `en/matchmaking_hopper_descriptions_003.bin` (required) | `mhdf` v3 | bitstream: count − 1 (6 bits), then per hopper u16 id (16 bits), a flag (1 bit), a NUL-terminated description (8-bit characters, 256 at most) |
+| `dynamic_pres_hopper_statistics.bin` | `mmhs` v4 | optional (population counts), not generated |
+| `en/dynamic_global_nag.bin` | | optional, not generated |
+| `%05u/game_set_015.bin` | `gset` v15 | per hopper, below |
+| `%05u/images/hopper.jpg` | | optional playlist image |
+
+Bitstreams are read most significant bit first in 64-bit big-endian words. The `mhcf`
+and `gset` payloads are compressed: a 14-bit byte count, then that many bytes: a u32
+big-endian uncompressed size and a zlib stream (`sub_822D8E38`, `sub_824E7FC8` →
+`uncompress` at 0x827D9860). They decode to fixed-size big-endian structures.
+
+**Hopper table** (0x8F48 bytes, at 0x83382E80 in the object at 0x83378FB8): +0 u32 hopper
+count, +4 u32 category count, 16 categories of 0x44 bytes at +8 ({u16 id, char name[32],
+u16 image, …}), 32 hoppers of 0x458 bytes at +0x448. Hopper fields known so far: +0 char
+name[32] (shown in the lobby), +0x20 salted SHA-1 of its game set, +0x34 u16 id, +0x36 u16
+category, +0x38 byte, +0x3C u32, +0x44 byte (selection group), +0x48 / +0x50 u64 start /
+end time (0 = always), +0x70 / +0x74 i32 min / max party size, +0x80, +0x84 i32, +0x88 –
++0x8C, +0x93, +0x94, +0xB4 – +0xB8, +0xC5 bytes, +0x98 /
++0xA0 / +0xA4 / +0xA8 / +0xAC i32 team layout limits checked against the game set
+(`sub_82291260`), +0x114 float, +0x384 byte variant source (0 = download game and map
+variant, 1/2 = game variant only). `sub_82290028` returns the reason a party cannot start a
+hopper (0x32 not started, 0x33 expired, 0x22 / 0x21 party too small / large, 0x25, 0x34,
+0x26 – 0x2F per-player requirements).
+
+**Game set** (0xD404 bytes): u32 count, then entries of 0xD4 bytes: +0 i32 weight (0 =
+off), +0x2C flags, +0x2E i16 (0–255), +0x30 i32 (0–31), +0x44 i32 map id, +0x48 game
+variant {+0 u8 present, +0x11 char name[32], +0x31 salted SHA-1}, +0x8D map variant (same
+layout). The variants are `%05u/%s_054.bin` (`gvar` v54, a bitstream decoded by
+`sub_824CD9E8`) and `%05u/map_variants/%s_031.bin` (`mvar` v31).
+
+#### "The Halo: Reach server is unavailable"
+
+The lobby state (`sub_8227D688`) is "available" when the hopper table is loaded and
+`sub_820B3D68` holds: no Arena-disable flag in the network configuration and byte
+0x8330D92C bit 0, which is set when a `GET /gameapi_omaha/ArenaGetSeasonStats.ashx
+?machineId&players&version=3` reply parses (`sub_822D84A8` → `sub_822D7F20`). The server
+answers it with `arhs` v3: {i32 season (replies below 1 are dropped), i32, u64, u8, u8, u32
+count (≤ 32), then 30-byte ratings starting with an XUID}; season 1 with no ratings is
+enough.

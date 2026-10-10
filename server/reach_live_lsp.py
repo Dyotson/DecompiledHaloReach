@@ -16,6 +16,9 @@ What is answered (docs/online_plan.md section 5.1, docs/progression_re.md sectio
 - POST /ReachPresenceApi/query.ashx (`preq` v3): `pplr` v5 reply with no records.
 - /gameapi_omaha/Files*.ashx: File Share (reach_live_files.py).
 - UserGetServiceRecord.ashx: an empty service record.
+- GET /gameapi_omaha/ArenaGetSeasonStats.ashx: `arhs` v3, Arena season 1 with no ratings.
+  The game counts the Halo: Reach server as up once this answers (docs/online_plan.md
+  section 5.4).
 - Everything else (title/user/machine storage, Arena, stats uploads): 404, which the game
   treats as "file not there" or "service unavailable". Files an operator puts under
   DATA_DIR/storage/<request path> are served as they are.
@@ -201,6 +204,18 @@ def service_record(query):
     return 200, "application/octet-stream", chunk(b"srid", 7, 1, bytes(SRID_SIZE - 12))
 
 
+ARHS_SIZE = 0x16 + 0x20 * 0x1E
+
+
+def arena_season_stats(query):
+    """ArenaGetSeasonStats (?machineId=&players=&version=3): `arhs` v3 is {i32 season (the
+    game drops a reply below 1), i32, u64, u8, u8, u32 rating count (32 at most), then per
+    player and playlist a 30-byte rating starting with the XUID}. Matchmaking stays
+    "server unavailable" until a reply parses; season 1 with no ratings is enough."""
+    payload = struct.pack(">iiQBBI", 1, 0, 0, 0, 0, 0)
+    return 200, "application/octet-stream", blf(chunk(b"arhs", 3, 1, payload.ljust(ARHS_SIZE, b"\0")))
+
+
 # --- Dispatch ------------------------------------------------------------------------
 
 def dump(method, path, headers, body):
@@ -242,6 +257,8 @@ def handle(server, method, path, headers, body, peer):
         return presence_query(body)
     if route == "/gameapi_omaha/usergetservicerecord.ashx":
         return service_record(query)
+    if route == "/gameapi_omaha/arenagetseasonstats.ashx":
+        return arena_season_stats(query)
     if route.startswith("/gameapi_omaha/files"):
         reply = files.handle(method, route, query, body, blf, chunk, upload, headers)
         if reply is not None:
