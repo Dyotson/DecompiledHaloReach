@@ -3,7 +3,8 @@
 # fixes in patches/rexglue-sdk/, and install it into an overlay of the nightly
 # SDK so the reach build and tools/run_reach.sh pick it up.
 #
-# Usage: tools/build_rexglue_sdk.sh
+# Usage: tools/build_rexglue_sdk.sh [--source-only]
+#   --source-only  only check out and patch the SDK source (all tools/build_windows.sh needs)
 #
 # Why: the SDK's SPIR-V shader translator reads the texture-fetch exponent bias
 # (exp_adjust) from fetch-constant word 4 instead of word 3. Reach's fetch
@@ -31,7 +32,9 @@ SRC="${REXSDK_SRC:-$HOME/rexglue-sdk-src/sdk}"
 OVERLAY="${REXSDK_PATCHED:-$HOME/rexglue-sdk-patched/0.10.0.24/linux-amd64}"
 BREW=/home/linuxbrew/.linuxbrew
 
-[ -d "$NIGHTLY/lib" ] || { echo "nightly SDK not found at $NIGHTLY" >&2; exit 1; }
+SOURCE_ONLY=0
+[ "${1:-}" = --source-only ] && SOURCE_ONLY=1
+[ "$SOURCE_ONLY" = 1 ] || [ -d "$NIGHTLY/lib" ] || { echo "nightly SDK not found at $NIGHTLY" >&2; exit 1; }
 
 if [ ! -d "$SRC/.git" ]; then
     git clone https://github.com/rexglue/rexglue-sdk "$SRC"
@@ -48,6 +51,7 @@ for patch in "$ROOT"/patches/rexglue-sdk/*.patch; do
         echo "applied: $(basename "$patch")"
     fi
 done
+[ "$SOURCE_ONLY" = 0 ] || exit 0
 
 # Building the SDK needs X11/XCB and Wayland headers (its UI module and SDL3
 # require them). Hosts without them (immutable Fedora) can use Homebrew's:

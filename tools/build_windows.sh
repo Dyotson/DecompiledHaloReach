@@ -26,7 +26,7 @@ PREFIX="${REXSDK_WIN_PREFIX:-$HOME/rexglue-sdk-patched/0.10.0.24/win-amd64}"
 JOBS="${JOBS:-$(nproc)}"
 
 [ -d "$XWIN/crt/include" ] || { echo "no MSVC CRT at $XWIN (run xwin splat, see above)" >&2; exit 1; }
-[ -d "$SRC/.git" ] || { echo "no SDK source at $SRC (run tools/build_rexglue_sdk.sh first)" >&2; exit 1; }
+[ -d "$SRC/.git" ] || { echo "no SDK source at $SRC (run tools/build_rexglue_sdk.sh [--source-only] first)" >&2; exit 1; }
 [ -f "$ROOT/reach-recomp/generated/default/sources.cmake" ] ||
     { echo "no generated code (build the Linux version first)" >&2; exit 1; }
 
@@ -88,10 +88,10 @@ cmake -S "$ROOT/reach-recomp" -B "$BUILD" -G Ninja -DCMAKE_BUILD_TYPE=Release \
     -Drexglue_DIR="$PREFIX/lib/cmake/rexglue" > /dev/null
 ninja -C "$BUILD" -j "$JOBS"
 
-# 3. Package: the game, its guest DLLs and the SDK's runtime DLLs.
+# 3. Package: the game, its guest DLLs, the SDK's runtime DLLs and the ISO extractor.
 DIST="$ROOT/reach-recomp/out/dist/windows"
 rm -rf "$DIST"
-mkdir -p "$DIST"
+mkdir -p "$DIST/licenses"
 cp "$BUILD"/reach.exe "$BUILD"/reach_*.dll "$DIST/"
 for dll in "$PREFIX"/bin/*.dll; do
     case "$(basename "$dll")" in
@@ -99,11 +99,22 @@ for dll in "$PREFIX"/bin/*.dll; do
         *) cp "$dll" "$DIST/" ;;
     esac
 done
+cp "$ROOT/tools/xdvdfs_extract.py" "$DIST/"
+cp "$ROOT/LICENSE" "$DIST/licenses/RecompiledHaloReach.txt"
+cp "$SRC/LICENSE" "$DIST/licenses/rexglue-sdk.txt"
+[ -f "$PREFIX/licenses/SDL3/LICENSE.txt" ] && cp "$PREFIX/licenses/SDL3/LICENSE.txt" "$DIST/licenses/SDL3.txt"
 cat > "$DIST/README.txt" <<'EOF'
 Halo: Reach (Xbox 360) recompiled for Windows - https://github.com/Dyotson/RecompiledHaloReach
 
-Needs the Microsoft Visual C++ 2015-2022 x64 redistributable and a Vulkan 1.3 GPU driver.
-Run from this folder, pointing at the game files extracted from your own disc:
+Needs the Microsoft Visual C++ 2015-2022 x64 redistributable, a Vulkan 1.3 GPU driver and
+your own copy of Halo: Reach for Xbox 360 (disc image of the base version, no title
+update). This package contains no game files.
+
+Extract the game files from your disc image with Python 3 (the image is only read):
+
+    python xdvdfs_extract.py "C:\path\to\Halo - Reach.iso" extract C:\path\to\extracted\xbox360
+
+Run from this folder, pointing at the extracted files:
 
     reach.exe --game_data_root=C:\path\to\extracted\xbox360
 

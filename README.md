@@ -111,6 +111,11 @@ cmake -S reach-recomp -B reach-recomp/out/build/linux-nightly -G Ninja \
 ninja -C reach-recomp/out/build/linux-nightly
 ```
 
+When `reach-recomp/generated/` already holds codegen output made elsewhere, configure with
+`-DREACH_SKIP_CODEGEN=ON` to compile it without `default.xex`. `tools/package_linux.sh` makes a
+self-contained copy of the build in `reach-recomp/out/dist/linux`: the game, the SDK runtime
+and patched GPU plugin, the ISO extractor and a launcher (`./play.sh /path/to/extracted/xbox360`).
+
 ## Playing
 
 ```sh

@@ -8,6 +8,13 @@ project(reach LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# Builds handed a finished generated/ (CI building from the private copy of the codegen
+# output) have no default.xex to run codegen on.
+option(REACH_SKIP_CODEGEN "Compile generated/ as it is, never run codegen" OFF)
+if(REACH_SKIP_CODEGEN AND NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/sources.cmake")
+    message(FATAL_ERROR "REACH_SKIP_CODEGEN is on but generated/default has no codegen output")
+endif()
+
 # generated/rexglue.cmake lists the generated sources at configure time, so on a fresh
 # checkout (no generated/default yet) codegen runs here once; otherwise the first build
 # would run it but compile none of its output.
@@ -26,11 +33,13 @@ include(generated/rexglue.cmake)
 
 # A cross build (tools/build_windows.sh) compiles the generated code the native build
 # made; it must not run codegen itself: the SDK's rexglue for the target cannot run here,
-# and regenerating would rewrite generated/ under the native build.
-if(CMAKE_CROSSCOMPILING AND TARGET rex::rexglue)
+# and regenerating would rewrite generated/ under the native build. The build-time
+# codegen step stays (rexglue.cmake orders the generated sources after it) but runs
+# true instead of rexglue.
+if((CMAKE_CROSSCOMPILING OR REACH_SKIP_CODEGEN) AND TARGET rex::rexglue)
     set_target_properties(rex::rexglue PROPERTIES
         IMPORTED_LOCATION /usr/bin/true IMPORTED_LOCATION_RELEASE /usr/bin/true)
-    message(STATUS "Cross build: codegen is skipped; run the native build first")
+    message(STATUS "Codegen is skipped: compiling generated/ as it is")
 endif()
 
 # Sources
