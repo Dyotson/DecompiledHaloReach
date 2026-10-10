@@ -495,31 +495,42 @@ title storage files the game downloads over HTTP from the server
 writes them under `DATA_DIR/storage/` and the server serves them as stored files. No Bungie
 file is in the repository: the generator builds every file from scratch. What it needs
 from the operator's game is read from the operator's copy: the hash salt and the built-in
-network configuration (from a running client), the map signatures (from the .map files)
-and the game and map variants (saved in game and uploaded to the server's File Share).
+network configuration (from a running client), the map signatures and map ids (from the
+maps directory) and the game types (saved in game and uploaded to the server's File Share).
 
 ```
 python3 server/reach_live_hoppers.py DATA_DIR --from-client PID     # once; PID = a running client
-#   game types: Custom Game, Game Type, pick one, Game Options, X "Save Game Type", then in
-#     the game type list X "File Options", "Upload to File Share" (to this server)
-#   maps: Forge, pick the map, save it unchanged ("Save As", named after the map), then in
-#     the map list X "File Options", "Upload to File Share"
+#   game types: Custom Game, Game Type, pick one, Game Options (Teams on for a team
+#     playlist), X "Save Game Type", then in the game type list X "File Options",
+#     "Upload to File Share" (to this server)
 python3 server/reach_live_hoppers.py DATA_DIR --maps extracted/xbox360/maps
 ```
 
 `DATA_DIR/playlists.json` replaces the built-in playlist list (`DEFAULT_PLAYLISTS` in the
-generator: one "Free For All" playlist, 2-8 players, the uploaded game type "Slayer" on
-Sword Base, Zealot and Powerhouse). Each game names a game type and a map; its map variant
-is the uploaded file named after the map unless `"map_variant"` names another. Games whose
-variants are not on the File Share are left out with a warning. Clients pick up new files
-when they restart.
+generator: "Free For All", 2-8 players, the game type "Slayer" on Sword Base, Zealot and
+Powerhouse; "Team Slayer", two teams of 1-4, the game type "Team Slayer" on Sword Base,
+Boardwalk and Countdown). Each game names a game type (the newest upload of that name) and
+a map (by its name in `maps/info`); the map variant is the map's default one, which the
+generator builds, unless `"map_variant"` names a Forge map uploaded to the File Share.
+Games whose files are missing are left out with a warning, and playlists without games.
+Clients pick up new files when they restart.
 
 **Status (two instances on one machine, one server): working.** Both press START
-MATCHMAKING on the "Free For All" playlist; within about 40 s they find each other, merge,
-pass arbitration and host selection, load Sword Base ("Starting match… Brace for carnage")
-and play Slayer together: both are in the game with the timer running and the scoreboard
-lists Carter and Jun. Not checked yet: the end of a match (stats writes, post-game, the
-next round), more than two players, team playlists.
+MATCHMAKING; within about 15-60 s they find each other, merge, pass arbitration and host
+selection, load the map ("Starting match… Brace for carnage") and play together: Slayer
+on Sword Base, Zealot and Powerhouse, and Team Slayer 1v1 (Red Team Carter, Blue Team Jun).
+After a match both save stats, leave the group, search again and are matched into the next
+game together; three games in a row were tested with a 1-minute game type. Not checked:
+more than two players, other game types, Arena.
+
+After every match the game itself dissolves the group: the matchmaking-recycle state
+(`sub_82283548`) leaves the group session and each party searches again, keeping its own
+members through the "matchmaking-rematch-data" parameter (`sub_8228D9F0`, the parties'
+session infos). Players who were idle are sent back to their lobby instead with "the party
+leader appears to be away from the game": a peer reports status bit 19 (`sub_8228EA18`)
+when its controller saw no input for 480 s (network configuration +0x5D8, `sub_822DA810`),
+and the post-match and recycle states return everyone to the lobby when a peer has it
+(`sub_8228E538`, `sub_82282EE8` reason 7). Scripted test runs need regular input.
 
 Three things blocked it, all in the data rather than the client:
 
@@ -537,7 +548,11 @@ Three things blocked it, all in the data rather than the client:
    countdown ends, needs both the game variant and the map variant parameters (and the
    map variant's map id at +0x2B4 to match the map). Without one, the state machine went
    in-match → end of match → recycle within a second. So playlists use variant source 0
-   (game and map variant files).
+   (game and map variant files). The map variant does not have to come from Forge: a
+   custom game without a saved map uses the map's default variant, which is an empty
+   variant flagged built-in for that map id (`sub_824CE7A0`; `sub_824CEDE8` keeps it and
+   the game places the map's own objects). The generator writes that variant as an `mvar`
+   file, below.
 
 The client side only gained XUserMuteListQuery (XLiveBase 0x5800E, answered "not muted"):
 Reach asks it for every other player several times a second during a match, and the SDK
@@ -605,7 +620,8 @@ u16 image, …}), 32 hoppers of 0x458 bytes at +0x448. Hopper fields:
 | +0x384 | byte, variant source: 0 game and map variant files, 1 or 2 game variant only (the match then never starts: `sub_82280140` needs a map variant), 3 none (keeps the session's previous variant; the first game of a session reads a null pointer in `sub_8227FAA0`) |
 | +0x385 | byte, no teams |
 | +0x388 / +0x38C | i32 min / max players without teams (`sub_82286418`, `sub_8227C040`); with a minimum of 1 a lone player's match starts at once |
-| +0x394, +0x39C… | teams: minimum team count and 8 team blocks of 0x10 bytes (sizes) |
+| +0x394 / +0x398 | i32 min / max team count (teams) |
+| +0x39C | 8 teams of 0x10 bytes: i32 min players (0 = unused), i32 max players, then two bytes (+0x8, +0xC) the "matchmaking-hopper" parameter sends in 3 bits each (`sub_8227C1D8`, `sub_822CFBA8`) |
 
 `sub_82290028` returns why a party cannot start a hopper (0x32 not started, 0x33 expired,
 0x22 / 0x21 party too small / large, 0x25, 0x34, 0x26 – 0x2F per-player requirements, or
@@ -624,9 +640,23 @@ variants are `%05u/%s_054.bin` and `%05u/map_variants/%s_031.bin`.
 `mpvr` v54 chunk of a game type the player saves: `mpvr` is {salted SHA-1 of the size
 and the bitstream, 4 bytes, u32 size, the bitstream (at most 0x5000 bytes)}
 (`sub_824CDDD8`), so the generator takes the file uploaded to the File Share (its `_cmp`
-chunk zlib-expanded) and serves the bitstream as `gvar`. Map variants (`mvar` v31) are served as the saved chunk. Map ids:
-Sword Base 1000, Zealot 1020, Boardwalk 1035, Powerhouse 1040, Countdown 1055, Spire 1080,
-Reflection 1150, Boneyard 1200, Forge World 3006.
+chunk zlib-expanded) and serves the bitstream as `gvar`.
+
+**Map variants** (`mvar` v31): {salted SHA-1 of the next two fields, u32 size, bitstream
+(at most 0x7000 bytes)} (`sub_824D4980`). The bitstream (`sub_824CFBA0`): the content
+header (`sub_824E9E88`: type + 1 in 4 bits, u32 size, 4 u64 ids, activity + 1, mode,
+engine in 3 bits each, u32 map id, a byte, creator and modifier {u64 time, u64 XUID, name in
+8-bit characters NUL-ended below 16, online bit}, name and description in 16-bit characters
+NUL-ended below 128, then fields that depend on type, activity and mode), version 31 (8
+bits), u32 map checksum (−1 = not checked), u32, budget entry count (9 bits), u32 map id,
+built-in and a second flag (1 bit each), 6 u32 world bounds, 2 u32s, a 9-bit count of
+12-bit entries, one presence bit (then the object) for each of the 651 object slots, and 3
+bytes per budget entry. The default variant: type 5, activity 4, mode 3, no objects, no
+budget entries, bounds ±FLT_MAX, built-in set. A Forge map uploaded to the File Share is
+served as its saved `mvar` chunk. Map ids come from the operator's `maps/info/*.mapinfo`
+(`levl` v7: u32 map id at +0, English name at +8): Sword Base 1000, Countdown 1020,
+Boardwalk 1035, Zealot 1040, Powerhouse 1055, Boneyard 1080, Reflection 1150, Spire 1200,
+Forge World 3006.
 
 #### "The Halo: Reach server is unavailable"
 

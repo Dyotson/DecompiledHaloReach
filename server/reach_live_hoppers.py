@@ -151,10 +151,19 @@ def hopper_table(categories, hoppers):
         for stage in range(4):
             struct.pack_into(">ii", t, o + 0x134 + stage * 0x94 + 0x28, h.get("max_ping", 200), 0)
         t[o + 0x384] = h["variant_source"]
-        # No teams: a match needs +0x388 to +0x38C players (sub_82286418, sub_8227C040).
-        # With a minimum of 1 a lone player's match starts at once.
-        t[o + 0x385] = 1
-        struct.pack_into(">ii", t, o + 0x388, h.get("min_players", 2), h.get("max_players", 8))
+        if h.get("teams"):
+            # Teams: +0x394 / +0x398 min / max team count, then 8 teams of 0x10 bytes at
+            # +0x39C {i32 min players (0 = team unused), i32 max players, ...}
+            # (sub_8227C1D8, sub_82286418, sub_8227C040, sub_822CFBA8).
+            low, high = h.get("team_size", (1, 4))
+            struct.pack_into(">ii", t, o + 0x394, h["teams"], h["teams"])
+            for team in range(h["teams"]):
+                struct.pack_into(">ii", t, o + 0x39C + team * 0x10, low, high)
+        else:
+            # No teams: a match needs +0x388 to +0x38C players. With a minimum of 1 a lone
+            # player's match starts at once.
+            t[o + 0x385] = 1
+            struct.pack_into(">ii", t, o + 0x388, h.get("min_players", 2), h.get("max_players", 8))
     return bytes(t)
 
 
@@ -228,9 +237,22 @@ def map_manifest(signatures):
     return blf(chunk(b"mapm", 1, 1, body.ljust(MAP_MANIFEST_SIZE, b"\0")))
 
 
-MAPS = {"Sword Base": 1000, "Zealot": 1020, "Boardwalk": 1035, "Powerhouse": 1040,
-        "Countdown": 1055, "Spire": 1080, "Reflection": 1150, "Boneyard": 1200,
-        "Forge World": 3006}
+def map_ids(maps_dir):
+    """{lowercase map name: map id} from the operator's maps/info/*.mapinfo (`levl` v7:
+    u32 map id, u32, then the English name, UTF-16, 32 characters)."""
+    from reach_live_lsp import chunks
+    out = {}
+    folder = os.path.join(maps_dir, "info")
+    for name in sorted(os.listdir(folder)) if os.path.isdir(folder) else []:
+        if not name.endswith(".mapinfo"):
+            continue
+        with open(os.path.join(folder, name), "rb") as f:
+            levl = chunks(f.read()).get(b"levl")
+        if levl and len(levl[2]) >= 0x48:
+            (map_id,) = struct.unpack_from(">I", levl[2], 0)
+            title = levl[2][8:0x48].decode("utf-16-be", "ignore").split("\0")[0]
+            out.setdefault(title.lower(), map_id)
+    return out
 
 # DATA_DIR/playlists.json replaces this. Game and map variants are named after files on the
 # server's File Share (save a game type or map in game, then "Upload to File Share").
@@ -242,38 +264,51 @@ DEFAULT_PLAYLISTS = {
          "games": [{"game_variant": "Slayer", "map": "Sword Base"},
                    {"game_variant": "Slayer", "map": "Zealot"},
                    {"game_variant": "Slayer", "map": "Powerhouse"}]},
+        {"id": 102, "category": 1, "name": "Team Slayer",
+         "description": "Two teams, kills win.", "max_party": 4, "teams": 2, "team_size": [1, 4],
+         "games": [{"game_variant": "Team Slayer", "map": "Sword Base"},
+                   {"game_variant": "Team Slayer", "map": "Boardwalk"},
+                   {"game_variant": "Team Slayer", "map": "Countdown"}]},
     ],
 }
-# A game's map variant defaults to the File Share file named after its map (a map saved
-# unchanged from Forge). Games whose variants are not on the File Share are left out.
+# A game's map variant is the map's default one unless "map_variant" names a map saved in
+# Forge and uploaded to the File Share. Games whose files are missing are left out.
 
 
 def shared_variants(data_dir):
     """{(file type, lowercase name): chunk payload} of the game variants (`mpvr`, type 6)
-    and map variants (`mvar`, type 5) on the server's File Share."""
+    and map variants (`mvar`, type 5) on the server's File Share; of two files with the
+    same name (the game saves under the variant's default name), the newest upload."""
+    import json
     import reach_live_files as share
     out = {}
+    uploads = []
     root = os.path.join(data_dir, "fileshare")
-    for owner in sorted(os.listdir(root)) if os.path.isdir(root) else []:
-        folder = os.path.join(root, owner)
-        for name in sorted(os.listdir(folder)):
-            if not name.endswith(".bin"):
-                continue
-            with open(os.path.join(folder, name), "rb") as f:
+    for owner in os.listdir(root) if os.path.isdir(root) else []:
+        try:
+            with open(os.path.join(root, owner, "index.json")) as f:
+                index = json.load(f)
+        except (OSError, ValueError):
+            continue
+        for entry in index.get("files", []):
+            uploads.append((entry.get("uploaded", 0), os.path.join(root, owner,
+                                                                   entry["server_id"] + ".bin")))
+    for _, path in sorted(uploads, reverse=True):
+        try:
+            with open(path, "rb") as f:
                 chunks = share.parse_chunks(f.read())
-            header = next((p for c, _, _, p in chunks if c == b"chdr"), None)
-            if header is None:
-                continue
-            title = header[4 + 0x80:4 + 0x180].decode("utf-16-be", "ignore").split("\0")[0]
-            for fourcc, major, _, payload in chunks:
-                if (fourcc, major) == (b"mpvr", 54):
-                    out.setdefault((6, title.lower()), payload)
-                elif (fourcc, major) == (b"mvar", 31):
-                    out.setdefault((5, title.lower()), payload)
+        except OSError:
+            continue
+        header = next((p for c, _, _, p in chunks if c == b"chdr"), None)
+        if header is None:
+            continue
+        title = header[4 + 0x80:4 + 0x180].decode("utf-16-be", "ignore").split("\0")[0]
+        for fourcc, major, _, payload in chunks:
+            if (fourcc, major) == (b"mpvr", 54):
+                out.setdefault((6, title.lower()), payload)
+            elif (fourcc, major) == (b"mvar", 31):
+                out.setdefault((5, title.lower()), payload)
     return out
-
-
-KIND = {"game_variant": 6, "map_variant": 5}  # File Share file types
 
 
 def game_variant_file(mpvr):
@@ -283,11 +318,56 @@ def game_variant_file(mpvr):
     return blf(chunk(b"gvar", 54, 1, mpvr[0x1C:0x1C + size]))
 
 
+def default_map_variant(salt, map_id, name):
+    """The `mvar` v31 chunk payload of a map's default variant, as a custom game uses when
+    nobody picked a saved one: no objects of its own, flagged built-in, so the game places
+    the map's default objects. Payload: salted SHA-1 of the next two fields, u32 size, the
+    bitstream (`sub_824D4980`). Bitstream (`sub_824CFBA0`): the content header
+    (`sub_824E9E88`), version 31, map checksum (−1 = not checked), a u32, 9-bit budget
+    count, map id, built-in and a second flag, 6 bounds, 2 u32s, 9-bit count, then a
+    presence bit for each of the 651 object slots."""
+    bits = BitWriter()
+    # Content header: type + 1 (5 map variant), size, unique / parent / root / game ids,
+    # activity + 1, mode, engine, map id, a signed byte, creator and modifier {time, XUID,
+    # 8-bit name (NUL-ended below 16), online bit}, name and description (16-bit characters,
+    # NUL-ended below 128). Activity 4 and mode 3 add no further fields.
+    for value, width in ((6, 4), (0x7329, 32), (0, 64), (0, 64), (0, 64), (0, 64),
+                         (5, 3), (3, 3), (0, 3), (map_id, 32), (0xFF, 8)):
+        bits.write(value, width)
+    for _ in range(2):
+        bits.write(0, 64)
+        bits.write(0, 64)
+        bits.write(0, 8)   # empty author name
+        bits.write(0, 1)
+    for text in (name, ""):
+        for c in text[:127]:
+            bits.write(ord(c), 16)
+        bits.write(0, 16)
+    bits.write(31, 8)
+    bits.write(0xFFFFFFFF, 32)
+    bits.write(0, 32)
+    bits.write(0, 9)
+    bits.write(map_id, 32)
+    bits.write(1, 1)       # built-in: no object budget or checksum to match
+    bits.write(0, 1)
+    for _ in range(3):     # world bounds, unset
+        bits.write(0x7F7FFFFF, 32)
+        bits.write(0xFF7FFFFF, 32)
+    bits.write(0, 32)
+    bits.write(0, 32)
+    bits.write(0, 9)
+    for _ in range(651):
+        bits.write(0, 1)
+    data = bits.data()
+    sized = struct.pack(">I", len(data)) + data
+    return hashlib.sha1(salt + sized).digest() + sized
+
+
 def file_name(title):
     return "".join(c if c.isalnum() else "_" for c in title.lower())[:24]
 
 
-def build(salt, signatures, network_configuration, playlists, variants):
+def build(salt, signatures, network_configuration, playlists, variants, maps):
     """{path relative to default_hoppers: file bytes}"""
     files = {}
     # `netc` v241, raw. The lobby reports the server unavailable while it is missing.
@@ -297,30 +377,43 @@ def build(salt, signatures, network_configuration, playlists, variants):
         h["variant_source"] = GAME_AND_MAP_VARIANT
         entries = []
         for g in h["games"]:
-            names = {"game_variant": g["game_variant"], "map_variant": g.get("map_variant", g["map"])}
-            missing = [(key, name) for key, name in names.items()
-                       if (KIND[key], name.lower()) not in variants]
-            if missing:
-                print("playlist %r: left out %s on %s, no %s on the File Share" % (
-                    h["name"], g["game_variant"], g["map"],
-                    " or ".join("%s named %r" % (k.replace("_", " "), n) for k, n in missing)),
-                    file=sys.stderr)
+            map_id = g["map"] if isinstance(g["map"], int) else maps.get(g["map"].lower())
+            if map_id is None:
+                print("playlist %r: left out %s on %s, no such map in maps/info"
+                      % (h["name"], g["game_variant"], g["map"]), file=sys.stderr)
                 continue
-            entry = {"map": MAPS.get(g["map"], g["map"]), "weight": g.get("weight", 1)}
-            for key, folder, version in (("game_variant", "", 54), ("map_variant", "map_variants/", 31)):
-                payload = variants[(KIND[key], names[key].lower())]
-                data = (game_variant_file(payload) if key == "game_variant"
-                        else blf(chunk(b"mvar", 31, 1, payload)))
-                name = file_name(names[key])
+            if (6, g["game_variant"].lower()) not in variants:
+                print("playlist %r: left out %s on %s, no game type named %r on the File Share"
+                      % (h["name"], g["game_variant"], g["map"], g["game_variant"]), file=sys.stderr)
+                continue
+            if g.get("map_variant") and (5, g["map_variant"].lower()) not in variants:
+                print("playlist %r: left out %s on %s, no map variant named %r on the File Share"
+                      % (h["name"], g["game_variant"], g["map"], g["map_variant"]), file=sys.stderr)
+                continue
+            entry = {"map": map_id, "weight": g.get("weight", 1)}
+            # The game type, and the named map variant or else the map's default one.
+            map_name = g.get("map_variant") or (g["map"] if isinstance(g["map"], str) else "map %d" % map_id)
+            mvar = (variants[(5, g["map_variant"].lower())] if g.get("map_variant")
+                    else default_map_variant(salt, map_id, map_name))
+            for key, title, folder, version, data in (
+                    ("game_variant", g["game_variant"], "", 54,
+                     game_variant_file(variants[(6, g["game_variant"].lower())])),
+                    ("map_variant", map_name, "map_variants/", 31, blf(chunk(b"mvar", 31, 1, mvar)))):
+                name = file_name(title)
                 files["%05u/%s%s_%03u.bin" % (h["id"], folder, name, version)] = data
                 entry[key] = (name, file_hash(salt, data))
             entries.append(entry)
         if not entries:
-            raise SystemExit("playlist %r: none of its games has its variants on the File Share"
-                             % h["name"])
+            print("playlist %r: left out, none of its games is available" % h["name"],
+                  file=sys.stderr)
+            h["skip"] = True
+            continue
         data = blf(compressed_chunk(b"gset", 15, 1, game_set(entries, h["variant_source"])))
         files["%05u/game_set_015.bin" % h["id"]] = data
         h["game_set_hash"] = file_hash(salt, data)
+    hoppers = [h for h in hoppers if not h.get("skip")]
+    if not hoppers:
+        raise SystemExit("no playlist has a game type on the File Share")
     files["matchmaking_hopper_027.bin"] = blf(
         compressed_chunk(b"mhcf", 27, 1, hopper_table(playlists["categories"], hoppers)))
     files["en/matchmaking_hopper_descriptions_003.bin"] = hopper_descriptions(hoppers)
@@ -329,14 +422,15 @@ def build(salt, signatures, network_configuration, playlists, variants):
     return files
 
 
-def write(data_dir, salt, signatures, network_configuration):
+def write(data_dir, salt, maps_dir, network_configuration):
     playlists = DEFAULT_PLAYLISTS
     config = os.path.join(data_dir, "playlists.json")
     if os.path.isfile(config):
         import json
         with open(config) as f:
             playlists = json.load(f)
-    files = build(salt, signatures, network_configuration, playlists, shared_variants(data_dir))
+    files = build(salt, map_signatures(maps_dir), network_configuration, playlists,
+                  shared_variants(data_dir), map_ids(maps_dir))
     root = os.path.join(data_dir, "storage", HOPPERS_DIR)
     files["manifest_001.bin"] = manifest(salt, {k: v for k, v in files.items()})
     for path, data in files.items():
@@ -351,7 +445,7 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Write the Reach Live matchmaking files.")
     parser.add_argument("data_dir", nargs="?", default="reach_live_data")
-    parser.add_argument("--maps", help="the game's maps directory (for the map signatures)")
+    parser.add_argument("--maps", help="the game's maps directory (map signatures and ids)")
     parser.add_argument("--from-client", type=int, metavar="PID",
                         help="copy the salt and network configuration from a running client")
     args = parser.parse_args()
@@ -366,5 +460,5 @@ if __name__ == "__main__":
     salt = load_salt(inputs[0])
     with open(inputs[1], "rb") as f:
         network_configuration = f.read()
-    for name in write(args.data_dir, salt, map_signatures(args.maps), network_configuration):
+    for name in write(args.data_dir, salt, args.maps, network_configuration):
         print(name)
