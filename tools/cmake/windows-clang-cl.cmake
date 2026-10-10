@@ -30,6 +30,8 @@ set(_xwin_flags "--target=x86_64-pc-windows-msvc -fuse-ld=lld-link /clang:-msse4
 foreach(_dir ${_xwin_includes})
     string(APPEND _xwin_flags " /imsvc \"${_dir}\"")
 endforeach()
+# Mixed-case names some sources use (ObjBase.h); tools/build_windows.sh makes the symlinks.
+string(APPEND _xwin_flags " /imsvc \"${XWIN_DIR}/../casefix\"")
 set(CMAKE_C_FLAGS_INIT "${_xwin_flags}")
 set(CMAKE_CXX_FLAGS_INIT "${_xwin_flags}")
 

@@ -8,8 +8,8 @@
 
 namespace reach {
 
-// Directory for per-installation data: $XDG_DATA_HOME/reach/4D53085B
-// (default ~/.local/share/reach/4D53085B; %LOCALAPPDATA%\reach\4D53085B on Windows).
+// Directory for per-installation data, next to the runtime's saves: reach/4D53085B in
+// $XDG_DATA_HOME (default ~/.local/share) on Linux, in Documents on Windows.
 std::filesystem::path DataDir();
 
 // The Reach Live server, host[:port]: REACH_SERVER, else the live_server setting.

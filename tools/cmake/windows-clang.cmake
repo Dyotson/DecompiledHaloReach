@@ -1,6 +1,6 @@
 # Like windows-clang-cl.cmake, but with the GNU-style clang/clang++ driver targeting the
 # MSVC ABI, which is how the ReXGlue SDK builds on Windows (its presets use clang++):
-# used for the patched GPU plugin (tools/build_rexglue_sdk.sh --windows).
+# tools/build_windows.sh builds the patched SDK (runtime and GPU plugin) with it.
 
 set(CMAKE_SYSTEM_NAME Windows)
 set(CMAKE_SYSTEM_VERSION 10.0)
@@ -15,14 +15,22 @@ set(CMAKE_CXX_COMPILER "${LLVM_BIN_DIR}/clang++")
 set(CMAKE_C_COMPILER_TARGET x86_64-pc-windows-msvc)
 set(CMAKE_CXX_COMPILER_TARGET x86_64-pc-windows-msvc)
 set(CMAKE_LINKER "${LLD_BIN_DIR}/lld-link")
-set(CMAKE_AR "${LLVM_BIN_DIR}/llvm-lib")
+# The GNU-style driver archives the ar way (qc + ranlib).
+set(CMAKE_AR "${LLVM_BIN_DIR}/llvm-ar")
+set(CMAKE_RANLIB "${LLVM_BIN_DIR}/llvm-ranlib")
 set(CMAKE_RC_COMPILER "${LLVM_BIN_DIR}/llvm-rc")
 set(CMAKE_MT "")
 
+# The MSVC headers go after clang's own (-idirafter, as clang-cl's /imsvc does): MSVC's
+# emmintrin.h and friends declare the SSE intrinsics as external functions, which then
+# fail to link.
 set(_flags "-fuse-ld=lld-link -B${LLD_BIN_DIR}")
 foreach(_dir crt/include sdk/include/ucrt sdk/include/um sdk/include/shared sdk/include/winrt)
-    string(APPEND _flags " -isystem \"${XWIN_DIR}/${_dir}\"")
+    string(APPEND _flags " -idirafter \"${XWIN_DIR}/${_dir}\"")
 endforeach()
+# Mixed-case names some sources use (ObjBase.h) for headers the SDK ships in lower case;
+# tools/build_windows.sh makes the symlinks.
+string(APPEND _flags " -idirafter \"${XWIN_DIR}/../casefix\"")
 set(CMAKE_C_FLAGS_INIT "${_flags}")
 set(CMAKE_CXX_FLAGS_INIT "${_flags}")
 set(_link "-L${XWIN_DIR}/crt/lib/x86_64 -L${XWIN_DIR}/sdk/lib/um/x86_64 -L${XWIN_DIR}/sdk/lib/ucrt/x86_64 -Wl,/manifest:embed")

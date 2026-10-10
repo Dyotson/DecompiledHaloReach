@@ -11,6 +11,7 @@
 #include "identity.h"
 
 #include <rex/cvar.h>
+#include <rex/filesystem.h>
 #include <rex/logging.h>
 
 #include <cctype>
@@ -114,17 +115,9 @@ const Identity& Get() {
 }  // namespace
 
 std::filesystem::path DataDir() {
-  std::string root;
-  if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
-    root = xdg;
-#ifdef _WIN32
-  } else if (const char* app_data = std::getenv("LOCALAPPDATA"); app_data && *app_data) {
-    root = app_data;
-#endif
-  } else if (const char* home = std::getenv("HOME")) {
-    root = std::string(home) + "/.local/share";
-  }
-  return std::filesystem::path(root) / "reach" / "4D53085B";
+  // The runtime's user folder, where it keeps the profile and saves too:
+  // $XDG_DATA_HOME or ~/.local/share on Linux, Documents on Windows.
+  return rex::filesystem::GetUserFolder() / "reach" / "4D53085B";
 }
 
 const std::string& LiveServerSpec() {
