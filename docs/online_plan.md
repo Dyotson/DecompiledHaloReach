@@ -535,9 +535,12 @@ Open:
 - Arena (only the season reply exists).
 - The Playlist screen shows no player counts ("CURRENT PLAYERS") and no playlist images
   (`%05u/images/hopper.jpg`); `dynamic_pres_hopper_statistics.bin` is not served.
-- Once, after leaving the Matchmaking lobby (with a second instance in the same party),
-  opening Custom Game made the game fault in a loop (null read on one thread). Leaving the
-  lobby and opening Custom Game alone did not reproduce it.
+- Once (2026-10-10, with a second instance on the same server), leaving the Matchmaking
+  lobby and opening Custom Game made the game fault in a loop (null read of guest address 0
+  on the main thread, 0.2 s after pressing A). It did not happen again in six attempts:
+  the same inputs on a freshly started instance (START menu, Challenges, back, leave the
+  lobby, Custom Game), after a matchmade game and "Return to lobby", after the Playlist
+  screen, and through the Campaign lobby.
 
 After every match the game itself dissolves the group: the matchmaking-recycle state
 (`sub_82283548`) leaves the group session and each party searches again, keeping its own
