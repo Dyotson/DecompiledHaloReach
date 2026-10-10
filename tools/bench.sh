@@ -17,7 +17,8 @@
 # frames.csv (every guest frame and host present), machine.txt and a screenshot of each step.
 # BENCH_LOCK=<file> (with BENCH_OWNER=<name>): a shared machine's lock for clean
 # measurements ("owner expiry-epoch purpose"); the run refuses to start while someone else
-# holds it.
+# holds it. While it holds the lock, it waits for other games to finish before the launch and
+# again before measuring (BENCH_WAIT seconds at most, default 1500).
 # Prints the guest and present summary lines (covering only the measured time), the game's
 # CPU use and the GPU's load (AMD) over that time, and the paths. Needs 10 GB of available
 # memory.
@@ -76,6 +77,16 @@ snapshot() {  # snapshot LABEL: one line of machine state, also kept in DIR/mach
         tee -a "$DIR/machine.txt"
 }
 CONTENDED=()
+holds_lock() { [ -n "${BENCH_LOCK:-}" ] && [ -f "$BENCH_LOCK" ] && [ "$(cut -d' ' -f1 "$BENCH_LOCK")" = "${BENCH_OWNER:-}" ]; }
+wait_alone() {  # wait_alone SECONDS: with the lock held, wait until no other game runs
+    holds_lock || return 0
+    local end=$((SECONDS + $1)) o said=""
+    while o=$(others); [ -n "$o" ]; do
+        [ $SECONDS -lt $end ] || { echo "other games still running after waiting: $o" >&2; return 1; }
+        [ -n "$said" ] || { echo "waiting for other games to finish: $o" >&2; said=1; }
+        sleep 5
+    done
+}
 
 DIR="${BENCH_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/reach_bench_${SCENARIO}_XXXX")}"
 mkdir -p "$DIR"
@@ -97,6 +108,7 @@ if [ "$COLD" = 1 ]; then
 fi
 
 rm -f "$DIR/frames.csv" "$DIR/perf.reset" "$DIR"/step_*.png "$DIR/machine.txt"
+wait_alone "${BENCH_WAIT:-1500}"
 snapshot "before launch" > /dev/null
 load_before=$(cut -d' ' -f1 /proc/loadavg)
 gpu_before=$(gpu_busy)
@@ -129,7 +141,10 @@ fail() { echo "$1 (last screen: $DIR/last.png)" >&2; stop; exit 1; }
 
 n=0
 step() {  # step WAIT [INPUT...]: press inputs, wait, screenshot to DIR/last.png and step_N.png
-    "$TOOLS/live_step.sh" "$DIR" "$@" > /dev/null 2>&1 || return 1
+    local ok=0
+    "$TOOLS/live_step.sh" "$DIR" "$@" > /dev/null 2>&1 || ok=1
+    rm -f "${DIR:?}"/reach_frame_*.bin "${DIR:?}"/reach_frame_*.json  # 3 MB each
+    [ $ok = 0 ] || return 1
     n=$((n + 1)); cp "$DIR/last.png" "$DIR/step_$(printf %02d $n).png"
 }
 state() { python3 "$TOOLS/menu_state.py" --strict "$1" "$DIR/last.png"; }
@@ -190,6 +205,7 @@ hz=$(getconf CLK_TCK)
 # AMD GPUs report how busy they are (all processes, so other games on the machine count).
 gpu_file=$(ls /sys/class/drm/card*/device/gpu_busy_percent 2>/dev/null | head -1)
 gpu_sum=0; gpu_n=0
+wait_alone 300
 snapshot "measurement start" > /dev/null
 seen_others=""
 cpu0=$(ticks); t0=$(date +%s.%N)
