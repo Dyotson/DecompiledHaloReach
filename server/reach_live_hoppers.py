@@ -2,15 +2,19 @@
 """Reach Live matchmaking playlists: builds the title-storage files the game downloads before
 it shows Matchmaking (docs/online_plan.md section 5.4).
 
-    python3 server/reach_live_hoppers.py DATA_DIR        # writes DATA_DIR/storage/...
+    python3 server/reach_live_hoppers.py DATA_DIR --from-client PID   # once, see below
+    python3 server/reach_live_hoppers.py DATA_DIR --maps GAME/maps     # writes DATA_DIR/storage/...
 
 The files are BLF files (`_blf`, data chunks, `_eof` with no authentication). The game
 downloads them from /storage/title/4d53085b/tracked/<build>/default_hoppers/ and checks each
 against the hash listed for it in manifest_001.bin (`onfm`), and each game set and variant
 against the hash its parent lists. The hash is SHA-1 over a 34-byte salt followed by the
-file; the salt is the start of the game executable's resource "00" and is not in this
-repository: the operator copies it from their game into DATA_DIR/title_key.bin (see
-docs/online_plan.md section 5.4).
+file. Two inputs come from the operator's game and are not in this repository: the salt
+(the start of the executable's resource "00") and the game's built-in network configuration,
+which the server must serve back (the lobby needs the file). `--from-client PID` copies both
+from a running client on this machine (Linux, /proc/PID/mem) into DATA_DIR/title_key.bin and
+DATA_DIR/network_configuration.bin; `--maps` reads the map signatures from the operator's
+.map files. docs/online_plan.md section 5.4 has the formats.
 """
 
 import hashlib
@@ -29,6 +33,23 @@ HOPPERS_DIR = "storage/title/%08x/tracked/%d/default_hoppers" % (TITLE_ID, BUILD
 
 
 SALT_SIZE = 0x22
+SALT_ADDRESS = 0x83AB0000       # resource "00" in the loaded executable
+NETWORK_CONFIGURATION_ADDRESS = 0x82BD28A8
+NETWORK_CONFIGURATION_SIZE = 0x2254
+GUEST_BASE = 0x100000000         # where the client maps guest memory
+
+
+def from_client(pid, data_dir):
+    with open("/proc/%d/mem" % pid, "rb", buffering=0) as mem:
+        for name, address, size in (("title_key.bin", SALT_ADDRESS, SALT_SIZE),
+                                    ("network_configuration.bin", NETWORK_CONFIGURATION_ADDRESS,
+                                     NETWORK_CONFIGURATION_SIZE)):
+            mem.seek(GUEST_BASE + address)
+            data = mem.read(size)
+            os.makedirs(data_dir, exist_ok=True)
+            with open(os.path.join(data_dir, name), "wb") as f:
+                f.write(data)
+            print(os.path.join(data_dir, name))
 
 
 def load_salt(path):
@@ -113,7 +134,42 @@ def hopper_table(categories, hoppers):
         t[o:o + len(name)] = name
         t[o + 0x20:o + 0x34] = h.get("game_set_hash", bytes(20))
         struct.pack_into(">HH", t, o + 0x34, h["id"], h["category"])
+        # Player requirements (sub_82290EA8): none. Experience, games played and rank
+        # ranges, access bit -1 = none, account type 2 = any.
+        struct.pack_into(">iiiiii", t, o + 0x58, 0, 0, 0, 0, -128, 127)
         struct.pack_into(">ii", t, o + 0x70, h.get("min_party", 1), h.get("max_party", 16))
+        struct.pack_into(">iiii", t, o + 0x78, -0x80000000, 0x7FFFFFFF, -1, 2)
+        # Voting (sub_82291260): options per vote, rounds.
+        struct.pack_into(">ii", t, o + 0x98, 1, 0)
+        struct.pack_into(">i", t, o + 0xA0, 1)
+        t[o + 0xB6] = 1
+        t[o + 0x384] = VARIANTS_NONE
+        t[o + 0x385] = 1                    # no teams: the player count is +0x38C
+        struct.pack_into(">i", t, o + 0x38C, h.get("max_players", 8))
+    return bytes(t)
+
+
+VARIANTS_NONE = 3   # hopper +0x384: 0 game and map variant, 1 or 2 game variant, else none
+
+GAME_SET_SIZE = 0xD404
+GAME_SET_ENTRY = 0xD4
+
+
+def game_set(entries, variants=VARIANTS_NONE):
+    """The decoded `gset` structure: u32 count, then 0xD4-byte entries (sub_822916A0,
+    sub_82291260): +0 i32 weight, +4 / +8 i32 min / max players, +0x14 i32 (at most 1),
+    +0x18 i32 (at least 50), +0x44 i32 map id, +0x48 game variant {u8 used, +0x11 name,
+    +0x31 hash}, +0x8D map variant (the same)."""
+    t = bytearray(GAME_SET_SIZE)
+    struct.pack_into(">I", t, 0, len(entries))
+    for i, e in enumerate(entries):
+        o = 4 + i * GAME_SET_ENTRY
+        struct.pack_into(">iii", t, o, e.get("weight", 1), e.get("min_players", 1),
+                         e.get("max_players", 16))
+        struct.pack_into(">ii", t, o + 0x14, 0, 100)
+        struct.pack_into(">i", t, o + 0x44, e["map"])
+        t[o + 0x48] = variants in (0, 1, 2)
+        t[o + 0x8D] = variants == 0
     return bytes(t)
 
 
@@ -153,15 +209,27 @@ def map_manifest(signatures):
     return blf(chunk(b"mapm", 1, 1, body.ljust(MAP_MANIFEST_SIZE, b"\0")))
 
 
-def build(salt, signatures):
+MAPS = {"Sword Base": 1000, "Zealot": 1020, "Boardwalk": 1035, "Powerhouse": 1040,
+        "Countdown": 1055, "Spire": 1080, "Reflection": 1150, "Boneyard": 1200}
+
+
+def build(salt, signatures, network_configuration):
     """{path relative to default_hoppers: file bytes}"""
     files = {}
+    # `netc` v241, raw. The lobby reports the server unavailable while it is missing.
+    files["network_configuration_241.bin"] = blf(chunk(b"netc", 241, 1, network_configuration))
     categories = [{"id": 1, "name": "Reach Live"}]
     hoppers = [
-        {"id": 101, "category": 1, "name": "Team Slayer", "description": "Two teams, kills win."},
+        {"id": 101, "category": 1, "name": "Team Slayer", "description": "Two teams, kills win.",
+         "maps": ["Sword Base", "Powerhouse", "Countdown", "Zealot"]},
         {"id": 102, "category": 1, "name": "Free For All", "max_party": 1,
-         "description": "Every Spartan for themselves."},
+         "description": "Every Spartan for themselves.", "maps": ["Sword Base", "Zealot"]},
     ]
+    for h in hoppers:
+        data = blf(compressed_chunk(b"gset", 15, 1,
+                                    game_set([{"map": MAPS[m]} for m in h["maps"]])))
+        files["%05u/game_set_015.bin" % h["id"]] = data
+        h["game_set_hash"] = file_hash(salt, data)
     files["matchmaking_hopper_027.bin"] = blf(
         compressed_chunk(b"mhcf", 27, 1, hopper_table(categories, hoppers)))
     files["en/matchmaking_hopper_descriptions_003.bin"] = hopper_descriptions(hoppers)
@@ -170,8 +238,8 @@ def build(salt, signatures):
     return files
 
 
-def write(data_dir, salt, signatures):
-    files = build(salt, signatures)
+def write(data_dir, salt, signatures, network_configuration):
+    files = build(salt, signatures, network_configuration)
     root = os.path.join(data_dir, "storage", HOPPERS_DIR)
     files["manifest_001.bin"] = manifest(salt, {k: v for k, v in files.items()})
     for path, data in files.items():
@@ -186,13 +254,20 @@ if __name__ == "__main__":
     import argparse
     parser = argparse.ArgumentParser(description="Write the Reach Live matchmaking files.")
     parser.add_argument("data_dir", nargs="?", default="reach_live_data")
-    parser.add_argument("--maps", required=True,
-                        help="the game's maps directory (for the map signatures)")
+    parser.add_argument("--maps", help="the game's maps directory (for the map signatures)")
+    parser.add_argument("--from-client", type=int, metavar="PID",
+                        help="copy the salt and network configuration from a running client")
     args = parser.parse_args()
-    key = os.path.join(args.data_dir, "title_key.bin")
-    if not os.path.isfile(key):
-        sys.exit("%s is missing: copy the 34-byte salt from a running client, e.g.\n"
-                 "  python3 tools/guestmem.py dump PID 0x83AB0000 34 %s" % (key, key))
-    salt = load_salt(key)
-    for name in write(args.data_dir, salt, map_signatures(args.maps)):
+    if args.from_client:
+        from_client(args.from_client, args.data_dir)
+        sys.exit(0)
+    inputs = [os.path.join(args.data_dir, n) for n in ("title_key.bin", "network_configuration.bin")]
+    missing = [p for p in inputs if not os.path.isfile(p)]
+    if missing or not args.maps:
+        sys.exit("need %s and --maps: run once with --from-client PID (a running client)"
+                 % " and ".join(missing or inputs))
+    salt = load_salt(inputs[0])
+    with open(inputs[1], "rb") as f:
+        network_configuration = f.read()
+    for name in write(args.data_dir, salt, map_signatures(args.maps), network_configuration):
         print(name)
