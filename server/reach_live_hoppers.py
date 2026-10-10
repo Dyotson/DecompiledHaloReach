@@ -179,15 +179,19 @@ def hopper_table(categories, hoppers):
 GAME_AND_MAP_VARIANT = 0
 
 GAME_SET_SIZE = 0xD404
+CREDITS_KEYS = ("credits_multiplier", "winner_multiplier", "top_half_multiplier")
 GAME_SET_ENTRY = 0xD4
 
 
 def game_set(entries, variant_source):
     """The decoded `gset` structure: u32 count, then 0xD4-byte entries (sub_822916A0,
     sub_82291260): +0 i32 weight, +4 / +8 i32 min / max players, +0x14 i32 (at most 1),
-    +0x18 i32 (at least 50), +0x44 i32 map id, +0x48 game variant {u8 used, +0x11 char
-    name[32] (file `<hopper>/<name>_054.bin`), +0x31 hash}, +0x8D map variant (the same,
-    `<hopper>/map_variants/<name>_031.bin`)."""
+    +0x18 i32 (at least 50), +0x2C u8 bit 0: Credits multipliers on, +0x34 / +0x38 / +0x3C
+    f32 multipliers of the Credits rate, the winner bonus and the top-half bonus (the
+    "matchmaking-game-configuration" session parameter, read by
+    GameResults_AwardGameCompletionCookies; zero when off), +0x44 i32 map id, +0x48 game
+    variant {u8 used, +0x11 char name[32] (file `<hopper>/<name>_054.bin`), +0x31 hash},
+    +0x8D map variant (the same, `<hopper>/map_variants/<name>_031.bin`)."""
     t = bytearray(GAME_SET_SIZE)
     struct.pack_into(">I", t, 0, len(entries))
     for i, e in enumerate(entries):
@@ -195,6 +199,9 @@ def game_set(entries, variant_source):
         struct.pack_into(">iii", t, o, e.get("weight", 1), e.get("min_players", 1),
                          e.get("max_players", 16))
         struct.pack_into(">ii", t, o + 0x14, 0, 100)
+        if e.get("credits"):
+            t[o + 0x2C] = 1
+            struct.pack_into(">fff", t, o + 0x34, *e["credits"])
         struct.pack_into(">i", t, o + 0x44, e["map"])
         for at, key, used in ((0x48, "game_variant", variant_source in (0, 1, 2)),
                               (0x8D, "map_variant", variant_source == 0)):
@@ -413,6 +420,11 @@ def build(salt, signatures, network_configuration, playlists, variants, maps):
                       % (h["name"], g["game_variant"], g["map"], g["map_variant"]), file=sys.stderr)
                 continue
             entry = {"map": map_id, "weight": g.get("weight", 1)}
+            # Credits: "credits_multiplier" (e.g. 2 for double cR) and optionally
+            # "winner_multiplier" / "top_half_multiplier", per game or for the playlist.
+            mult = [g.get(k, h.get(k)) for k in CREDITS_KEYS]
+            if any(m is not None for m in mult):
+                entry["credits"] = [1.0 if m is None else float(m) for m in mult]
             # The game type, and the named map variant or else the map's default one.
             map_name = g.get("map_variant") or (g["map"] if isinstance(g["map"], str) else "map %d" % map_id)
             mvar = (variants[(5, g["map_variant"].lower())] if g.get("map_variant")

@@ -274,9 +274,9 @@ The game results globals at 0x8373FE80 hold, for the game that just ended:
 |---|---|
 | +0x18 | u8 matchmaking game (1) |
 | +0x1C | u32 hopper id (0x65 = 101); +0x20 the hopper name, UTF-16 |
-| +0x70 | u8 multiplayer matchmaking kind: 0 → `gcrg` sub 0, 1 → sub 2, 2 → sub 1 (0 here) |
-| +0x78 / +0x7C | i32 bonus cR, awarded as kind 8 when the game lasted at least +0x7C minutes (0 / 0) |
-| +0xAC bit 0, +0xB4 / +0xB8 / +0xBC | f32 multipliers of the entry's rate / winner / performance factors (off) |
+| +0x70 | u8 multiplayer matchmaking kind, from hopper +0x39: 0 → `gcrg` sub 0, 1 → sub 2, 2 → sub 1 (0 here) |
+| +0x78 / +0x7C | i32 bonus cR, awarded as kind 8 when the game lasted at least +0x7C minutes (0 / 0; the lobby never sets them) |
+| +0xAC bit 0, +0xB4 / +0xB8 / +0xBC | f32 multipliers of the entry's rate / winner / performance factors, from the game set entry +0x2C / +0x34 / +0x38 / +0x3C (off) |
 | +0xD0 | u8 team game: placing is by team |
 | +0xD4 | u32 game mode: 1 campaign, 2 Firefight, 3 multiplayer |
 | +0xDC | u32 `gcrg` sub for campaign and Firefight |
@@ -491,7 +491,7 @@ Commendations (`comg`, 45 entries of 0x34): for example headshot_mp has tiers 50
 
 ## 7. Unknowns and next steps
 1. How netcfg is applied: confirm that the downloaded `network_configuration_241.bin` overwrites 0x82BD28A8, find its parser, and record the 1.0 launch rank cap Bungie served.
-2. ~~`gcrg` `cat`/`sub` selection~~ (section 3.1). Award kinds 2, 3, 4 and 7, and the callers of kind 9. Which hopper fields fill the matchmaking cR options (0x8373FE80 +0x70, +0x78/+0x7C, +0xAC/+0xB4..+0xBC).
+2. ~~`gcrg` `cat`/`sub` selection and the playlist cR options~~ (section 3.1, docs/online_plan.md 5.4). Award kinds 2, 3, 4 and 7, and the callers of kind 9.
 3. Meaning of rpdl +0x208..+0x215, of rpul +0x735..+0x777, and of `fulc` and `loca` (the i16 counters of blocks A/B are commendation progress, section 3.1).
 4. The `dcha` entry bytes beyond [0..1], and the expiry units (FILETIME?).
 5. Source of the DLC/promo mask at 0x8391F5EC (user.bin? content enumeration? avatar awards?). Contents of user.bin.

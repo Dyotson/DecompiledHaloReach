@@ -766,8 +766,23 @@ counters. Capture the Flag, Oddball and King of the Hill games paid the same +30
 game; at the end of the round Carter had 5993 cR and Jun 6033, and the challenge progress
 and commendation counters were still there after each restart.
 
-Not handled: the hopper's own Credits options. The game results globals (0x8373FE80) carry
-a matchmaking kind (+0x70, selecting the `gcrg` entry), a bonus (+0x78, paid when the game
-lasted +0x7C minutes) and multipliers (+0xAC bit 0, +0xB4…+0xBC); they come from the
-hopper or game set (where is not known yet) and are zero in our files, which gives the
-standard rates.
+**Playlist Credits options.** When the host starts a matchmade game it copies the hopper's
+matchmaking options into the game options (`sub_8227FE48`, game options +0xFA54; +0xFA50 is
+the "matchmaking game" flag the incident filter tests as game globals +0xFA60), and the
+chosen game set entry's +0x2C…+0x3C into the "matchmaking-game-configuration" session
+parameter (`sub_8228B300`). At the end of the game they are in the game results globals
+(0x8373FE80) that `GameResults_AwardGameCompletionCookies` reads:
+
+| Game results | Source | Effect |
+|---|---|---|
+| +0x70 u8 | hopper +0x39 | `gcrg` multiplayer entry: 0 or 1 = 28 cR/min with ×1.2 winner and ×1.1 top-half bonuses, 2 = 27 cR/min, no top-half bonus |
+| +0xAC bit 0 | game set entry +0x2C bit 0 | turns the three multipliers on |
+| +0xB4 / +0xB8 / +0xBC f32 | game set entry +0x34 / +0x38 / +0x3C | multiply the entry's rate, winner bonus and top-half bonus |
+| +0x78 / +0x7C | matchmaking-hopper parameter +0x6C / +0x70 | bonus cR (award kind 8) when the game lasted that many minutes; the lobby (`sub_8227D688`) always leaves them 0 |
+
+The game set check (`sub_82291260`) wants the three floats to be zero when bit 0 is off;
++0x2E (u16, 0-255) and +0x30 (i32, 0-31) are unknown. The generator sets them from a
+playlist's (or a game's) `"credits_multiplier"` (e.g. 2 for double cR), and optionally
+`"winner_multiplier"` and `"top_half_multiplier"` (default 1). Tested: with
+`"credits_multiplier": 2` on Team Slayer, a 1-minute 0-0 game paid each player 61 cR
+(28 × 2 × 1.1) instead of 30, and the game results showed the multipliers (2, 1, 1).
