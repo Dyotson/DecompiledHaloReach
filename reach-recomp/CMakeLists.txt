@@ -8,6 +8,20 @@ project(reach LANGUAGES CXX)
 set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 
+# generated/rexglue.cmake lists the generated sources at configure time, so on a fresh
+# checkout (no generated/default yet) codegen runs here once; otherwise the first build
+# would run it but compile none of its output.
+if(NOT CMAKE_CROSSCOMPILING AND NOT REXSDK_DIR AND
+   NOT EXISTS "${CMAKE_CURRENT_SOURCE_DIR}/generated/default/sources.cmake")
+    find_package(rexglue 0.10.0 REQUIRED CONFIG)
+    get_target_property(_rexglue rex::rexglue LOCATION)
+    message(STATUS "First configure: running codegen (${_rexglue}), this takes a while")
+    execute_process(
+        COMMAND "${_rexglue}" codegen "${CMAKE_CURRENT_SOURCE_DIR}/reach_manifest.toml"
+        WORKING_DIRECTORY "${CMAKE_CURRENT_SOURCE_DIR}"
+        COMMAND_ERROR_IS_FATAL ANY)
+endif()
+
 include(generated/rexglue.cmake)
 
 # A cross build (tools/build_windows.sh) compiles the generated code the native build
