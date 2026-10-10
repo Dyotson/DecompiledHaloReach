@@ -53,6 +53,7 @@ the game (see [Legal](#legal)).
 | Forge | Works locally: editing on Sword Base, object placement, saving map variants |
 | Online | Over the internet through a self-hosted **Reach Live** server: an emulated Xbox LIVE (friends roster, presence, joining a friend's lobby) and System Link (the game's browser lists everyone's games). Tested with up to three players on one machine: Firefight and Slayer, host migration. Direct peer-to-peer with NAT hole punching, relayed by the server when that fails ([`docs/online_plan.md`](docs/online_plan.md) section 5). Matchmaking, file share and Xbox LIVE party are not available |
 | File share | Not started |
+| Higher resolution | `resolution_scale = 2` in `reach.toml` (or `--resolution_scale=2`) renders at 2304×1440 instead of 1152×720; menus and Firefight checked, no artifacts seen. Frame rate on a dedicated GPU still to be measured |
 | Keyboard and mouse | On by default next to pads: Halo-style bindings (rebindable `kbm_bind_*` cvars) and raw mouse look fed straight into player control, no stick emulation ([`docs/input.md`](docs/input.md)) |
 
 See [`docs/PROJECT.md`](docs/PROJECT.md) for the detailed status log and debugging recipes.

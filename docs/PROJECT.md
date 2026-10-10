@@ -254,6 +254,10 @@ Check exact param names in `endpoints.json` before calling.
   `DIR_A/data`, `DIR_B/data`; keep them on disk, not in RAM-backed `/tmp`).
   `REACH_SERVER_RELAY=1` forces the relay path. `curl localhost:21101` shows players and
   relayed bytes.
+- `tools/live_shot.sh DIR` saves what the window shows (the presenter's output, at the draw
+  resolution scale) as `DIR/shot.png`; `live_step.sh` frame dumps read guest memory and stay
+  at 1152×720. `live_session.sh` removes orphaned `/dev/shm/xenia_memory_*` files before
+  starting (killed instances leave 5 GB each; a full /dev/shm kills new instances with SIGBUS).
 - `qrenderdoc --python` crashes with "Illegal instruction" under `QT_QPA_PLATFORM=offscreen`;
   run it without that variable.
 - Each instance takes about 6 GB of RAM and 5 GB of `/dev/shm`. `REACH_NETTRACE=1` logs every

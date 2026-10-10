@@ -8,7 +8,8 @@ server** (section 5) and play together over the internet in two ways:
   lobby roster lists them with their game ("In Firefight Lobby 1/16") and "Join" works:
   presence, session search, QoS game details and the secure connection are answered by our
   layer (section 5.2). Verified: a friend joins a Firefight lobby from the roster and both
-  play the match.
+  play the match; a Slayer custom game on Sword Base played to its time limit goes through
+  the postgame (Credits earned), the carnage report and back to the shared lobby.
 - **System Link:** every connected player's System Link games appear in the game's own
   browser (also on one machine with `REACH_NET=1`, the virtual network in section 4).
   Verified: Firefight with two players, Slayer on Sword Base with three, host migration
@@ -16,7 +17,7 @@ server** (section 5) and play together over the internet in two ways:
   and the match goes on).
 
 Traffic goes directly between players through UDP hole punching, or through the server when
-that fails. Not yet tried: a full match to the postgame, separate machines across real NATs.
+that fails. Not yet tried: separate machines across real NATs.
 Not available: matchmaking (signed playlists, section 5.1), file share, Xbox LIVE party.
 `tools/system_link_pair.sh` sets up a pair (with `REACH_SERVER` set, through a server).
 "Guess" marks statements not confirmed by code or a run.

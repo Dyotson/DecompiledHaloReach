@@ -10,6 +10,10 @@
 // REACH_FRAMEDUMP_TRIGGER=<path> also dumps a frame whenever that file appears
 // (it is deleted again), for stepping through menus with REACH_AUTOPRESS_FIFO.
 //
+// REACH_SCREENSHOT_TRIGGER=<path> saves the host's output image instead (what the
+// window shows, at the draw resolution scale, e.g. --resolution_scale=2) as
+// reach_shot_<secs>.ppm in the same directory whenever that file appears.
+//
 // REACH_FPSLOG=1 logs the guest frame rate (VdSwap calls) every 5 seconds.
 //
 // REACH_INVALIDATE_AT="20" fires the physical-memory write callbacks over the
@@ -24,6 +28,9 @@
 // too much between runs for fixed times to land on the same shot.
 
 #include <rex/logging.h>
+#include <rex/runtime.h>
+#include <rex/system/interfaces/graphics.h>
+#include <rex/ui/presenter.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/kernel_state.h>
@@ -41,6 +48,7 @@
 #include <cstring>
 #include <mutex>
 #include <string>
+#include <thread>
 #include <vector>
 
 namespace {
@@ -188,6 +196,37 @@ void MaybeTriggerRenderDocCapture(double now) {
   swaps = 1;
 }
 
+// Saves the presenter's current guest output image (what the window shows before
+// scaling to it, at the draw resolution scale) as a binary PPM. On its own thread:
+// the capture waits for a GPU copy.
+void CaptureHostOutput(double now, const std::string& dir) {
+  std::thread([now, dir] {
+    auto* runtime = rex::Runtime::instance();
+    auto* graphics = runtime ? runtime->graphics_system() : nullptr;
+    auto* presenter = graphics ? graphics->presenter() : nullptr;
+    rex::ui::RawImage image;
+    if (!presenter || !presenter->CaptureGuestOutput(image)) {
+      REXLOG_WARN("REACH_SCREENSHOT: no presenter output to capture");
+      return;
+    }
+    char name[64];
+    std::snprintf(name, sizeof(name), "/reach_shot_%07.2f.ppm", now);
+    const std::string path = dir + name;
+    FILE* f = std::fopen((path + ".tmp").c_str(), "wb");
+    if (!f) return;
+    std::fprintf(f, "P6\n%u %u\n255\n", image.width, image.height);
+    std::vector<uint8_t> row(size_t(image.width) * 3);
+    for (uint32_t y = 0; y < image.height; ++y) {
+      const uint8_t* src = image.data.data() + y * image.stride;
+      for (uint32_t x = 0; x < image.width; ++x) std::memcpy(&row[3 * x], src + 4 * x, 3);
+      std::fwrite(row.data(), 1, row.size(), f);
+    }
+    std::fclose(f);
+    std::rename((path + ".tmp").c_str(), path.c_str());
+    REXLOG_INFO("REACH_SCREENSHOT: {}x{} -> {}", image.width, image.height, path);
+  }).detach();
+}
+
 }  // namespace
 
 // void VdSwap(buffer_ptr, fetch_ptr, unk2, unk3, unk4, frontbuffer_ptr,
@@ -221,6 +260,12 @@ extern "C" REX_FUNC(__imp__VdSwap) {
   if (dump_trigger && *dump_trigger && fetch_addr && ++dump_polls % 10 == 0 &&
       std::remove(dump_trigger) == 0) {
     DumpFrontBuffer(base, fetch_addr, elapsed, schedule.dir);
+  }
+  static const char* shot_trigger = std::getenv("REACH_SCREENSHOT_TRIGGER");
+  static int shot_polls = 0;
+  if (shot_trigger && *shot_trigger && ++shot_polls % 10 == 0 &&
+      std::remove(shot_trigger) == 0) {
+    CaptureHostOutput(elapsed, schedule.dir);
   }
   if (schedule.next < schedule.times.size() && fetch_addr) {
     double now = std::chrono::duration<double>(std::chrono::steady_clock::now() - start).count();
