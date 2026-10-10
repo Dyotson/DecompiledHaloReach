@@ -1450,4 +1450,15 @@ REACH_NET_TRACE(XamVoiceSubmitPacket)
 REACH_NET_TRACE(XamVoiceHeadsetPresent)
 // XMsgStartIORequest[Ex] and XMsgInProcessCall: src/kernel/live_xmsg.cpp.
 REACH_NET_TRACE(XMsgCancelIORequest)
-REACH_NET_TRACE(XMsgCompleteIORequest)
+namespace reach { void XamTaskMessageDone(PPCContext& ctx, uint8_t* base, uint32_t lr); }
+extern "C" REX_FUNC(__imp__XMsgCompleteIORequest) {
+  REACH_NET_SDK(XMsgCompleteIORequest);
+  static std::atomic<uint64_t> calls{0};
+  const uint32_t lr = uint32_t(ctx.lr);
+  if (!NetTrace()) {
+    if (sdk) sdk(ctx, base);
+  } else {
+    Traced("XMsgCompleteIORequest", sdk, calls, ctx, base);
+  }
+  reach::XamTaskMessageDone(ctx, base, lr);
+}

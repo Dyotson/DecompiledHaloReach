@@ -182,12 +182,37 @@ extern "C" REX_FUNC(__imp__ObDereferenceObject) {
 extern "C" REX_FUNC(__imp__XamGetPrivateEnumStructureFromHandle) {
   static GuestFunc sdk = Sdk("__imp__XamGetPrivateEnumStructureFromHandle");
   const uint32_t handle = ctx.r3.u32, out = ctx.r4.u32;
+  const uint32_t lr = ctx.lr;
+  const std::string bt = Trace() ? Backtrace(ctx, base) : std::string();
   sdk(ctx, base);
+  if (Trace()) {
+    static std::atomic<uint64_t> n{0};
+    if (Sample(n)) REXLOG_WARN("ENUMTRACE GetPrivateEnum({:08X}) lr {:08X} from{}", handle, lr, bt);
+  }
   if (ctx.r3.u32 || !out) return;
   const uint32_t ptr = Load32(GuestPtr(base, out));
   std::lock_guard<std::mutex> lock(enumerators_mutex);
   if (enumerators.size() > 4096) enumerators.clear();  // mostly closed enumerators by then
   enumerators[ptr] = handle;
+}
+
+// DWORD XamContentCreateEnumerator(user, device, type, flags, items, DWORD* buffer_size,
+//                                  HANDLE* enumerator)  (trace only)
+extern "C" REX_FUNC(__imp__XamContentCreateEnumerator) {
+  static GuestFunc sdk = Sdk("__imp__XamContentCreateEnumerator");
+  const uint32_t in[7] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32,
+                          ctx.r7.u32, ctx.r8.u32, ctx.r9.u32};
+  const uint32_t lr = ctx.lr;
+  sdk(ctx, base);
+  if (Trace()) {
+    static std::atomic<uint64_t> n{0};
+    if (Sample(n)) {
+      REXLOG_WARN("ENUMTRACE CreateEnumerator(user {:X}, device {:X}, type {:X}, flags {:X}, "
+                  "items {}) -> {:08X} handle {:08X} lr {:08X}",
+                  in[0], in[1], in[2], in[3], in[4], ctx.r3.u32,
+                  in[6] ? Load32(GuestPtr(base, in[6])) : 0, lr);
+    }
+  }
 }
 
 // DWORD XamTaskSchedule(void* callback, XTASK_MESSAGE* message, DWORD* unknown, HANDLE* task)
@@ -203,14 +228,45 @@ extern "C" REX_FUNC(__imp__XamTaskSchedule) {
   stack_size = std::max(0x4000u, (stack_size + 0xFFF) & 0xFFFFF000);  // as the runtime
   auto thread =
       object_ref<XThread>(new XThread(kernel, stack_size, 0, callback, message, 0, true));
+  // The task handle goes in first: the task may finish, and free its message (which holds
+  // the handle for Reach), before Create returns.
+  if (task) Store32(GuestPtr(base, task), 12345);  // the runtime's dummy task handle
   const uint32_t result = thread->Create();
   if (int32_t(result) < 0) {
     REXLOG_ERROR("XamTaskSchedule({:08X}): thread creation failed: {:08X}", callback, result);
+    if (task) Store32(GuestPtr(base, task), 0);  // Reach frees its message when this is 0
     ctx.r3.u64 = result;
     return;
   }
   // The thread keeps its own reference until it exits.
   thread->ReleaseHandle();
-  if (task) Store32(GuestPtr(base, task), 12345);  // the runtime's dummy task handle
   ctx.r3.u64 = 0;
 }
+
+namespace reach {
+// Called from XMsgCompleteIORequest. Reach's XEnumerate task (0x828057B0) ends with that
+// call, and nothing frees the task's message block (XamAlloc'd by 0x828055B8, freed by Reach
+// only when XamTaskSchedule fails): the console's task runtime frees it when the callback
+// returns, the SDK's does not. Each enumeration pass leaked a block of the system heap
+// (one page or more each), and a few thousand passes while loading a mission exhausted it.
+// The message is still in r28 at that call (the task's argument), and nothing reads it
+// after the call. Also releases the reference the message holds on the overlapped's event.
+void XamTaskMessageDone(PPCContext& ctx, uint8_t* base, uint32_t lr) {
+  if (lr != 0x828058AC || UseSdk()) return;
+  const uint32_t message = ctx.r28.u32;
+  if (message < 0x10000) return;
+  const uint8_t* m = GuestPtr(base, message);
+  const uint32_t event_object = Load32(m + 16);
+  PPCContext c = ctx;
+  if (event_object) {
+    c.r3.u64 = event_object;
+    __imp__ObDereferenceObject(c, base);
+  }
+  static GuestFunc free_block = Sdk("__imp__XamFree");
+  c = ctx;
+  c.r3.u64 = message;
+  free_block(c, base);
+  static std::atomic<uint64_t> freed{0};
+  if (Trace() && Sample(freed)) REXLOG_WARN("XAM task message {:08X} freed (#{})", message, freed.load());
+}
+}  // namespace reach

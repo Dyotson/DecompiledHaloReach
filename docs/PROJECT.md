@@ -315,6 +315,31 @@ Check exact param names in `endpoints.json` before calling.
     Hang diagnosis: `gdb -p PID -batch -ex 'thread apply all bt 25'`; threads faulting in
     `XThread::Exit` mean a freed thread object.
 
+- 2026-10-10: **Firefight mission-load freeze fixed (two causes after the object-refs fix).**
+  - Why a load listed content thousands of times: Reach's XEnumerate task (0x828057B0) passes
+    the XAM app (0xFE, message 0x2000E) an output slot for the item count that is an
+    uninitialized stack slot. The SDK writes it only when it finds an item and answers
+    NO_MORE_FILES without touching it, so the task read back the guest stack's 0xBEBEBEBE
+    fill as the count ("buffer full"), the content task (completion 0x825F49F0) never moved on
+    to the next device, and the main thread's task drain (0x824BA280) re-ran it forever
+    (about 1,000 passes a second; the old runs ended only when something else broke).
+    `live_xmsg.cpp` now zeroes the count before the call.
+  - The per-pass leak: the task message block (XamAlloc'd in 0x828055B8, one system-heap page
+    or more) is freed by Reach only if XamTaskSchedule fails; the console's task runtime frees
+    it when the task returns, the SDK's does not. `XamTaskMessageDone` (object_refs.cpp, called
+    from the XMsgCompleteIORequest wrapper in net.cpp when the caller is the task's last
+    call at 0x828058AC) frees the block and the event reference it holds. XamTaskSchedule now
+    stores the dummy task handle before creating the thread.
+  - Verified (copy of the profile, 3 x Overlook then Courtyard started while "Readying map",
+    plus Corvette and Holdout 60 s each, plus an offline custom game): no freeze, 44-47 guest
+    threads flat across loads, no "task creation failed". `REACH_OBJTRACE=1` also logs
+    "ENUMTRACE" lines (enumerator creation args, enumerate callers) and freed task messages.
+    Note: a START GAME press while the row is greyed ("Readying map") is ignored by the game;
+    press it again when it says Ready.
+  - Not XAM: the frame loop's wait in `sub_820E40F0` (docs/framerate.md) is an
+    NtWaitForSingleObjectEx on a render hand-off event (via 0x826129A8/0x820CCF70), not an
+    XAM task or overlapped; the signaller is the guest RENDER thread (`sub_820CA090` loop).
+
 ## Debugging recipes
 
 - Run: `tools/run_reach.sh <secs> [flags]` (logs `/tmp/reach_run.log`, rotates at 5 MB). It skips

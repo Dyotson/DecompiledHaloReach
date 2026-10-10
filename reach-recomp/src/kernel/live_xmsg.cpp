@@ -777,6 +777,16 @@ GuestFunc Sdk(const char* name) { return reach::SdkImport(name); }
 extern "C" REX_FUNC(__imp__XMsgInProcessCall) {
   static GuestFunc sdk = Sdk("__imp__XMsgInProcessCall");
   const uint32_t in[6] = {ctx.r3.u32, ctx.r4.u32, ctx.r5.u32, ctx.r6.u32, ctx.r7.u32, ctx.r8.u32};
+  // The SDK's content-aggregate enumeration (XAM app 0xFE, message 0x2000E) writes the item
+  // count only when it finds an item, and answers NO_MORE_FILES without touching it.
+  // Reach's task (0x828057B0) points it at an uninitialized stack slot and passes what it
+  // finds there on as the count; a leftover 0xBEBEBEBE read as "a full buffer", so the
+  // enumeration never moved to the next device and Firefight spun in it forever at
+  // "Readying map".
+  if (in[0] == 0xFE && in[1] == 0x2000E && in[2]) {
+    const uint32_t length_ptr = Load32(GuestPtr(base, in[2] + 24));
+    if (length_ptr) Store32(GuestPtr(base, length_ptr), 0);
+  }
   const uint32_t result = Handle(base, in[0], in[1], in[2], in[3]);
   if (result != kNotOurs) {
     ctx.r3.u64 = result;
