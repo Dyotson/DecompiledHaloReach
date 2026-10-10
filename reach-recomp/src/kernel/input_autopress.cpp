@@ -26,8 +26,10 @@
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 
+#ifndef _WIN32
 #include <fcntl.h>
 #include <unistd.h>
+#endif
 
 #include <chrono>
 #include <cstdint>
@@ -124,6 +126,13 @@ std::mutex schedule_mutex;
 // Reads "INPUT[:hold]" lines from the FIFO and schedules each one right away.
 void ReadFifo(std::string path, std::vector<Press>* schedule,
               std::chrono::steady_clock::time_point start) {
+#ifdef _WIN32
+  // A POSIX FIFO; scripted test sessions (tools/live_session.sh) run on Linux.
+  (void)schedule;
+  (void)start;
+  REXLOG_WARN("REACH_AUTOPRESS_FIFO is not supported on Windows ({})", path);
+  return;
+#else
   // O_RDWR keeps the FIFO open (no EOF) when the writer goes away.
   int fd = open(path.c_str(), O_RDWR);
   if (fd < 0) {
@@ -170,6 +179,7 @@ void ReadFifo(std::string path, std::vector<Press>* schedule,
     REXLOG_INFO("REACH_AUTOPRESS_FIFO: t={:.2f}s {}", now, line);
     line.clear();
   }
+#endif
 }
 
 GuestFunc SdkGetState() {

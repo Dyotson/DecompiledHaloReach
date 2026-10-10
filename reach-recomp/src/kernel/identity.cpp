@@ -117,6 +117,10 @@ std::filesystem::path DataDir() {
   std::string root;
   if (const char* xdg = std::getenv("XDG_DATA_HOME"); xdg && *xdg) {
     root = xdg;
+#ifdef _WIN32
+  } else if (const char* app_data = std::getenv("LOCALAPPDATA"); app_data && *app_data) {
+    root = app_data;
+#endif
   } else if (const char* home = std::getenv("HOME")) {
     root = std::string(home) + "/.local/share";
   }

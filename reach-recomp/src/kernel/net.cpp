@@ -39,18 +39,13 @@
 #include "identity.h"
 #include "live.h"
 #include "live_tcp.h"
+#include "../platform/socket.h"
 
 #include <rex/logging.h>
 #include <rex/ppc/context.h>
 #include <rex/ppc/func.h>
 #include <rex/system/xthread.h>
 
-#include <arpa/inet.h>
-#include <netdb.h>
-#include <netinet/in.h>
-#include <poll.h>
-#include <sys/socket.h>
-#include <unistd.h>
 
 #include <algorithm>
 #include <atomic>
@@ -272,7 +267,7 @@ class VNet {
     return net;
   }
 
-  bool Ready() const { return fd_ >= 0; }
+  bool Ready() const { return fd_ != reach::sock::kInvalid; }
 
   uint32_t CreateSocket() {
     std::lock_guard<std::mutex> lock(mutex_);
@@ -543,9 +538,10 @@ class VNet {
     } else if (lan_ || live_) {
       self_ip_ = LanAddress();
     }
+    reach::sock::Startup();
     fd_ = socket(AF_INET, SOCK_DGRAM, 0);
     int one = 1;
-    setsockopt(fd_, SOL_SOCKET, SO_BROADCAST, &one, sizeof(one));
+    setsockopt(fd_, SOL_SOCKET, SO_BROADCAST, reinterpret_cast<const char*>(&one), sizeof(one));
     const bool any = lan_ || live_;  // reachable from other machines
     uint16_t first = kHostPortFirst, count = kHostPortCount;
     if (const char* port = std::getenv("REACH_NET_PORT"); port && *port) {
@@ -566,8 +562,8 @@ class VNet {
     }
     if (!host_port_) {
       REXLOG_ERROR("REACH_NET: no free host UDP port in {}-{}", first, first + count - 1);
-      close(fd_);
-      fd_ = -1;
+      reach::sock::Close(fd_);
+      fd_ = reach::sock::kInvalid;
       return;
     }
     REXLOG_INFO("REACH_NET: virtual network on {} UDP {}{}", IpString(self_ip_), host_port_,
@@ -596,7 +592,7 @@ class VNet {
 
   static uint32_t LanAddress() {
     // The source address the kernel picks for an outgoing route; no packet is sent.
-    int s = socket(AF_INET, SOCK_DGRAM, 0);
+    reach::sock::Handle s = socket(AF_INET, SOCK_DGRAM, 0);
     sockaddr_in a{};
     a.sin_family = AF_INET;
     a.sin_port = htons(53);
@@ -609,7 +605,7 @@ class VNet {
         ip = ntohl(local.sin_addr.s_addr);
       }
     }
-    close(s);
+    reach::sock::Close(s);
     return ip;
   }
 
@@ -955,7 +951,7 @@ class VNet {
     a.sin_family = AF_INET;
     a.sin_port = htons(endpoint.port);
     a.sin_addr.s_addr = htonl(endpoint.ip);
-    sendto(fd_, packet.data(), packet.size(), 0, reinterpret_cast<sockaddr*>(&a), sizeof(a));
+    reach::sock::SendTo(fd_, packet.data(), packet.size(), a);
   }
 
   void Deliver(uint32_t vip, uint16_t source_port, uint16_t port, const uint8_t* data,
@@ -975,9 +971,7 @@ class VNet {
     std::vector<uint8_t> buffer(65536);
     for (;;) {
       sockaddr_in from{};
-      socklen_t from_len = sizeof(from);
-      ssize_t n = recvfrom(fd_, buffer.data(), buffer.size(), 0,
-                           reinterpret_cast<sockaddr*>(&from), &from_len);
+      const int64_t n = reach::sock::RecvFrom(fd_, buffer.data(), buffer.size(), from);
       if (n < 5) continue;
       Endpoint endpoint{ntohl(from.sin_addr.s_addr), ntohs(from.sin_port)};
       const uint32_t magic = Load32(buffer.data());
@@ -985,7 +979,7 @@ class VNet {
         OnLive(endpoint, buffer[4], buffer.data() + 5, size_t(n) - 5);
         continue;
       }
-      if (n < ssize_t(kHeaderSize) || magic != kMagic) continue;
+      if (n < int64_t(kHeaderSize) || magic != kMagic) continue;
       if (endpoint.port == host_port_ && (endpoint.ip == self_ip_ || endpoint.ip == INADDR_LOOPBACK)) {
         continue;  // our own broadcast
       }
@@ -995,7 +989,7 @@ class VNet {
     }
   }
 
-  int fd_ = -1;
+  reach::sock::Handle fd_ = reach::sock::kInvalid;
   bool lan_ = false;
   uint32_t self_ip_ = 0;
   uint16_t host_port_ = 0;

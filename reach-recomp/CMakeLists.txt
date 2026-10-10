@@ -33,6 +33,7 @@ set(REACH_SOURCES
     src/kernel/xam_signin.cpp
     src/kernel/xecrypt_rsa.cpp
     src/platform/sdk_import.cpp
+    src/platform/socket.cpp
     src/input/kbm.cpp
 )
 
