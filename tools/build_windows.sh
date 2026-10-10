@@ -100,7 +100,7 @@ for dll in "$PREFIX"/bin/*.dll; do
     esac
 done
 cat > "$DIST/README.txt" <<'EOF'
-Halo: Reach (Xbox 360) recompiled for Windows - https://github.com/Dyotson/DecompiledHaloReach
+Halo: Reach (Xbox 360) recompiled for Windows - https://github.com/Dyotson/RecompiledHaloReach
 
 Needs the Microsoft Visual C++ 2015-2022 x64 redistributable and a Vulkan 1.3 GPU driver.
 Run from this folder, pointing at the game files extracted from your own disc:

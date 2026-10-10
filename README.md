@@ -1,4 +1,4 @@
-# DecompiledHaloReach
+# RecompiledHaloReach
 
 A native PC port of **Halo: Reach (Xbox 360)** built by statically recompiling the
 original PowerPC executable to C++ with the [ReXGlue SDK](https://github.com/rexglue/rexglue-sdk),
