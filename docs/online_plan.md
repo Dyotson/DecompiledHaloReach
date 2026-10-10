@@ -309,6 +309,8 @@ REACH_SERVER=example.org tools/run_reach.sh 3600                         # each 
   registers players, forwards System Link broadcasts to everyone in the same room, relays
   datagrams between players that can't reach each other, and tells each player its public
   address. `--http-port` serves a JSON status page (players, rooms, relay totals).
+  `--rate-limit` (bytes/s, default 64 KB/s, 4 s bursts) caps what the server relays or
+  broadcasts for one player; `server/Dockerfile` packages it.
   `server/test_reach_live_server.py` tests the protocol.
 - **Client** (`src/kernel/net.cpp`): `REACH_SERVER=host[:port]` turns on the virtual network
   in Live mode. Options: `REACH_ROOM=name` (only players in the same room see each other),

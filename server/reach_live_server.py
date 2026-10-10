@@ -32,6 +32,16 @@ MAX_PRESENCE_EXTRA = 1024
 
 PEER_TIMEOUT = 30.0  # seconds without a HELLO before a peer is dropped
 MAX_PAYLOAD = 1500
+# Per-player limit on bytes the server sends for it (relayed datagrams; a broadcast counts
+# once per recipient): a two-player match is about 2 KB/s per player, a full lobby of 16
+# a few times that. Defaults to 64 KB/s with 256 KB bursts (--rate-limit).
+RATE_LIMIT = 64 * 1024
+RATE_BURST = 4 * RATE_LIMIT
+
+
+def set_rate_limit(bytes_per_second):
+    global RATE_LIMIT, RATE_BURST
+    RATE_LIMIT, RATE_BURST = bytes_per_second, 4 * bytes_per_second
 MAX_NAME = 15  # XUSER_NAME_SIZE minus the terminator
 
 log = logging.getLogger("reach-live")
@@ -49,6 +59,9 @@ class Peer:
         self.seen = time.monotonic()
         self.since = time.time()
         self.relayed_bytes = 0
+        # Token bucket for what this player makes the server send (relay, broadcast).
+        self.budget = RATE_BURST
+        self.budget_time = time.monotonic()
         # Presence, as friends see it: X_ONLINE_FRIENDSTATE flags, the joinable session
         # (an XSESSION_INFO, zeros when none) and a status line.
         self.state = 0
@@ -78,6 +91,7 @@ class ReachLive(asyncio.DatagramProtocol):
         self.started = time.time()
         self.relayed_packets = 0
         self.http_port = 0  # TCP port of the title servers, told to clients; 0 = none
+        self.dropped_packets = 0  # over a player's rate limit
 
     def connection_made(self, transport):
         self.transport = transport
@@ -157,8 +171,21 @@ class ReachLive(asyncio.DatagramProtocol):
     def room_peers(self, src):
         return [p for p in self.peers.values() if p.room == src.room and p is not src]
 
+    def spend(self, peer, nbytes):
+        """Takes nbytes from the player's budget; False (drop it) when over the limit."""
+        now = time.monotonic()
+        peer.budget = min(RATE_BURST, peer.budget + (now - peer.budget_time) * RATE_LIMIT)
+        peer.budget_time = now
+        if peer.budget < nbytes:
+            self.dropped_packets += 1
+            return False
+        peer.budget -= nbytes
+        return True
+
     def on_broadcast(self, src, body):
         if len(body) < 4 or len(body) - 4 > MAX_PAYLOAD:
+            return
+        if not self.spend(src, len(body) * max(1, len(self.room_peers(src)))):
             return
         packet = self.forward_header(src) + body
         for peer in self.room_peers(src):
@@ -166,6 +193,8 @@ class ReachLive(asyncio.DatagramProtocol):
 
     def on_relay(self, src, body):
         if len(body) < 8 or len(body) - 8 > MAX_PAYLOAD:
+            return
+        if not self.spend(src, len(body)):
             return
         (dst_id,) = struct.unpack_from(">I", body, 0)
         dst = self.peers.get(dst_id)
@@ -249,7 +278,8 @@ class ReachLive(asyncio.DatagramProtocol):
                  "online_for": int(time.time() - p.since), "relayed_bytes": p.relayed_bytes,
                  "state": f"{p.state:08X}", "session": p.session[:8].hex(), "status": p.status})
         return {"server": "reach-live", "protocol": VERSION, "uptime": int(time.time() - self.started),
-                "players": len(self.peers), "relayed_packets": self.relayed_packets, "rooms": rooms}
+                "players": len(self.peers), "relayed_packets": self.relayed_packets,
+                "dropped_packets": self.dropped_packets, "rooms": rooms}
 
 
 async def read_request(reader):
@@ -309,10 +339,13 @@ async def main():
                              "page (default: off)")
     parser.add_argument("--motd", default="Welcome to Reach Live", help="message sent to clients")
     parser.add_argument("--max-peers", type=int, default=1024)
+    parser.add_argument("--rate-limit", type=int, default=RATE_LIMIT,
+                        help="bytes per second the server relays for one player (bursts of 4 s)")
     parser.add_argument("-v", "--verbose", action="store_true")
     lsp.add_arguments(parser)
     args = parser.parse_args()
     lsp.configure(args)
+    set_rate_limit(args.rate_limit)
     logging.basicConfig(level=logging.DEBUG if args.verbose else logging.INFO,
                         format="%(asctime)s %(message)s")
 

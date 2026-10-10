@@ -105,8 +105,13 @@ Game saves and the emulated cache partitions are stored under `~/.local/share/re
 Anyone can run a server; it needs Python 3 and one open UDP port:
 
 ```sh
-python3 server/reach_live_server.py --port 21100 --http-port 21101
+python3 server/reach_live_server.py --port 21100 --http-port 21101 --data-dir reach_live_data
+# or: docker build -t reach-live server/ &&
+#     docker run -p 21100:21100/udp -p 21101:21101 -v reach-live-data:/data reach-live
 ```
+
+The data directory keeps players' progression and File Share. `--rate-limit` caps what
+the server relays per player (64 KB/s by default; a match needs a few KB/s).
 
 Players point the game at it, in `reach.toml` next to the executable (or the F4 settings
 overlay, "Network/Reach Live"):

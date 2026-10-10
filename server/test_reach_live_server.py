@@ -140,5 +140,35 @@ class ServerTest(unittest.TestCase):
         self.assertEqual((kind, body[0]), (ERROR, 1))
 
 
+class RateLimitTest(unittest.TestCase):
+    def test_relay_over_the_limit_is_dropped(self):
+        port = free_port()
+        proc = subprocess.Popen([sys.executable, os.path.join(HERE, "reach_live_server.py"),
+                                 "--host", "127.0.0.1", "--port", str(port), "--rate-limit", "1000"],
+                                stderr=subprocess.DEVNULL)
+        try:
+            time.sleep(0.5)
+            addr = ("127.0.0.1", port)
+            a = Client(addr, b"Flood", 0x0009000000000031)
+            b = Client(addr, b"Target", 0x0009000000000032)
+            a.hello()
+            b_id = b.hello()
+            for _ in range(40):  # 40 KB in an instant against a 4 KB burst
+                a.send(RELAY, struct.pack(">IHH", b_id, 1000, 1000) + bytes(1000))
+            b.sock.settimeout(0.3)
+            received = 0
+            try:
+                while True:
+                    kind, _ = b.recv()
+                    received += kind == FORWARD
+            except socket.timeout:
+                pass
+            self.assertGreater(received, 0)
+            self.assertLess(received, 8)
+        finally:
+            proc.terminate()
+            proc.wait()
+
+
 if __name__ == "__main__":
     unittest.main()
